@@ -17,8 +17,10 @@
 
 环境要求：Node.js 22 或更高版本、npm、支持 WebGL 的现代浏览器。首次安装依赖需要网络，安装后场景使用本地静态资源。
 
+在 VS Code 中使用“文件 → 打开文件夹”，选择 `F:\cjy\Code\DigitalEarth\digitalEarth`。该目录就是 Git 仓库根目录，可直接作为工作区打开。
+
 ```powershell
-cd F:\cjy\Code\DigitalEarth\frontend
+cd F:\cjy\Code\DigitalEarth\digitalEarth\frontend
 npm ci
 npm run dev
 ```
@@ -56,7 +58,22 @@ docs/
   development.md            架构说明、学习入口与阶段验收
 ```
 
-本地已有 `文档资料/`、`文献/`、`data/`、`work/` 保持原位，通过 `.gitignore` 排除，不随源码提交。新增数据、凭据和临时输出也应遵循该规则。
+本地项目资料与代码仓库分开放置：
+
+```text
+F:\cjy\Code\DigitalEarth\
+  digitalEarth/             Git 仓库根目录，VS Code 打开此文件夹
+    .git/
+    docs/                   随源码维护的开发说明
+    frontend/
+    README.md
+  文档资料/                 原始项目文档
+  文献/                     参考资料
+  data/                     原始数据
+  work/                     临时工作目录
+```
+
+`文档资料/`、`文献/`、`data/` 和 `work/` 保持在上级项目目录，位于 Git 仓库之外。仓库内仅维护源码、构建配置及开发说明；本机依赖和构建输出通过 `.gitignore` 排除。新增数据、凭据和临时输出不提交到仓库。
 
 ## 技术基线与边界
 
