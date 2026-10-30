@@ -1,0 +1,29 @@
+# Dependencies and build outputs
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+test-results/
+playwright-report/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+*.key
+
+# Original project documents, datasets, and scratch work stay local
+/文档资料/
+/文献/
+/data/
+/work/
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+~$*
+*.log
