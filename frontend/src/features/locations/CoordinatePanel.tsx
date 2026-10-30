@@ -83,13 +83,6 @@ export function CoordinatePanel({ onLocate, disabled }: Props) {
           <Icon name="arrow" size={16} />
         </button>
       </form>
-      <div className="panel-divider" />
-      <h3 className="section-title">
-        地名查询 <span className="tag muted">下一阶段</span>
-      </h3>
-      <p className="quiet-description">
-        后续接入本地 GeoNames 索引和 Go 查询服务，支持中文地名、重名区分与点击定位。
-      </p>
     </>
   );
 }

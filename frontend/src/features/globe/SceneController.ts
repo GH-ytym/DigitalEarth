@@ -3,6 +3,7 @@ import {
   Cartesian3,
   Cartographic,
   Color,
+  createWorldTerrainAsync,
   EllipsoidTerrainProvider,
   GridImageryProvider,
   HeightReference,
@@ -13,13 +14,14 @@ import {
   SceneMode,
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
+  sampleTerrainMostDetailed,
   TileMapServiceImageryProvider,
   VerticalOrigin,
   Viewer,
 } from 'cesium';
 import { sceneConfig } from '../../config/scene';
 import { initialSnapshot } from './types';
-import type { BasemapName, GeoPosition, SceneSnapshot } from './types';
+import type { BasemapName, GeoPosition, SceneSnapshot, TerrainStatus } from './types';
 
 /** Owns the Viewer and all Cesium resources. React only receives serializable data. */
 export class SceneController {
@@ -33,14 +35,16 @@ export class SceneController {
   private lastPointerUpdate = 0;
   private selectedBasemap: BasemapName = 'natural';
   private requestedGrid = false;
+  private terrainRequestId = 0;
+  private selectionRevision = 0;
+  private removeTerrainErrorListener?: () => void;
 
   constructor(
     container: HTMLElement,
     private readonly onChange: (state: SceneSnapshot) => void,
   ) {
-    // No ion account or external service is needed for this first local scene.
     window.CESIUM_BASE_URL = sceneConfig.cesiumBaseUrl;
-    Ion.defaultAccessToken = '';
+    Ion.defaultAccessToken = sceneConfig.ionToken;
     this.viewer = new Viewer(container, {
       baseLayer: false,
       terrainProvider: new EllipsoidTerrainProvider(),
@@ -59,9 +63,9 @@ export class SceneController {
       shouldAnimate: false,
     });
     const scene = this.viewer.scene;
-    scene.backgroundColor = Color.fromCssColorString('#020711');
+    scene.backgroundColor = Color.fromCssColorString('#06162e');
     if (scene.skyBox) scene.skyBox.show = false;
-    scene.globe.baseColor = Color.fromCssColorString('#1d3549');
+    scene.globe.baseColor = Color.fromCssColorString('#0a2345');
     scene.globe.enableLighting = false;
     scene.screenSpaceCameraController.minimumZoomDistance = 100;
     scene.screenSpaceCameraController.maximumZoomDistance = 100_000_000;
@@ -100,6 +104,7 @@ export class SceneController {
     );
     this.updateCamera();
     void this.loadImagery();
+    void this.setTerrainEnabled(true);
   }
 
   private emit(patch: Partial<SceneSnapshot>) {
@@ -130,7 +135,7 @@ export class SceneController {
       this.gridLayer = this.viewer.imageryLayers.addImageryProvider(
         new GridImageryProvider({
           cells: 8,
-          color: Color.fromCssColorString('#9cd8e8').withAlpha(0.24),
+          color: Color.WHITE.withAlpha(0.24),
           glowColor: Color.TRANSPARENT,
           backgroundColor: Color.TRANSPARENT,
         }),
@@ -158,9 +163,18 @@ export class SceneController {
 
   private pick(position: Cartesian2): GeoPosition | null {
     if (this.viewer.scene.mode === SceneMode.MORPHING) return null;
-    // The current surface is an ellipsoid. Intersect it exactly: picking its
-    // coarse rendered mesh at global scale can otherwise report false negative heights.
-    // Real terrain will require globe/terrain picking when it is introduced.
+    if (this.snapshot.terrainStatus === 'ready') {
+      const ray = this.viewer.camera.getPickRay(position);
+      const point = ray && this.viewer.scene.globe.pick(ray, this.viewer.scene);
+      if (!point) return null;
+      const location = Cartographic.fromCartesian(point);
+      return {
+        longitude: CesiumMath.toDegrees(location.longitude),
+        latitude: CesiumMath.toDegrees(location.latitude),
+        height: Number.isFinite(location.height) ? location.height : null,
+      };
+    }
+    // Use an exact ellipsoid intersection while no real terrain is active.
     const point = this.viewer.camera.pickEllipsoid(position, this.viewer.scene.globe.ellipsoid);
     if (!point) return null;
     const location = Cartographic.fromCartesian(point);
@@ -172,16 +186,21 @@ export class SceneController {
   }
 
   select(position: GeoPosition) {
+    this.selectionRevision++;
+    const heightReference =
+      this.snapshot.terrainStatus === 'ready'
+        ? HeightReference.CLAMP_TO_GROUND
+        : HeightReference.NONE;
     this.viewer.entities.removeById('selected-position');
     this.viewer.entities.add({
       id: 'selected-position',
-      position: Cartesian3.fromDegrees(position.longitude, position.latitude, position.height),
+      position: Cartesian3.fromDegrees(position.longitude, position.latitude, position.height ?? 0),
       point: {
         pixelSize: 9,
-        color: Color.fromCssColorString('#a4f2d3'),
-        outlineColor: Color.fromCssColorString('#173c46'),
+        color: Color.WHITE,
+        outlineColor: Color.fromCssColorString('#17559a'),
         outlineWidth: 3,
-        heightReference: HeightReference.NONE,
+        heightReference,
       },
       label: {
         text: `${position.longitude.toFixed(3)}°, ${position.latitude.toFixed(3)}°`,
@@ -192,6 +211,7 @@ export class SceneController {
         style: LabelStyle.FILL_AND_OUTLINE,
         pixelOffset: new Cartesian2(0, -18),
         verticalOrigin: VerticalOrigin.BOTTOM,
+        heightReference,
       },
     });
     this.emit({ selection: position });
@@ -199,18 +219,40 @@ export class SceneController {
   }
 
   clearSelection() {
+    this.selectionRevision++;
     this.viewer.entities.removeById('selected-position');
     this.emit({ selection: null });
     this.viewer.scene.requestRender();
   }
 
   locate(longitude: number, latitude: number, cameraAltitude: number) {
-    this.select({ longitude, latitude, height: 0 });
+    const useTerrain = this.snapshot.terrainStatus === 'ready';
+    this.select({ longitude, latitude, height: useTerrain ? null : 0 });
+    if (useTerrain) void this.sampleSelectedHeight(longitude, latitude);
     this.viewer.camera.flyTo({
       destination: Cartesian3.fromDegrees(longitude, latitude, cameraAltitude),
       duration: 1.4,
       orientation: { heading: 0, pitch: -CesiumMath.PI_OVER_TWO, roll: 0 },
     });
+  }
+
+  private async sampleSelectedHeight(longitude: number, latitude: number) {
+    const revision = this.selectionRevision;
+    const requestId = this.terrainRequestId;
+    try {
+      const [point] = await sampleTerrainMostDetailed(this.viewer.terrainProvider, [
+        Cartographic.fromDegrees(longitude, latitude),
+      ]);
+      if (
+        this.disposed ||
+        revision !== this.selectionRevision ||
+        requestId !== this.terrainRequestId
+      )
+        return;
+      if (Number.isFinite(point.height)) this.select({ longitude, latitude, height: point.height });
+    } catch {
+      // Keep an unknown height unknown; do not manufacture a zero elevation.
+    }
   }
 
   home(animate = true) {
@@ -268,14 +310,64 @@ export class SceneController {
     this.viewer.scene.requestRender();
   }
 
-  setLighting(enabled: boolean) {
-    this.viewer.scene.globe.enableLighting = enabled;
+  async setTerrainEnabled(enabled: boolean) {
+    if (this.disposed) return;
+    if (
+      enabled &&
+      (this.snapshot.terrainStatus === 'loading' || this.snapshot.terrainStatus === 'ready')
+    )
+      return;
+    const requestId = ++this.terrainRequestId;
+    this.removeTerrainErrorListener?.();
+    this.removeTerrainErrorListener = undefined;
+    if (!sceneConfig.ionToken) {
+      this.restoreEllipsoid('unconfigured');
+      return;
+    }
+    if (!enabled) {
+      this.restoreEllipsoid('disabled');
+      return;
+    }
+    this.emit({ terrainStatus: 'loading', terrainError: undefined });
+    try {
+      const provider = await createWorldTerrainAsync();
+      if (this.disposed || requestId !== this.terrainRequestId) return;
+      this.removeTerrainErrorListener = provider.errorEvent.addEventListener(() => {
+        if (this.disposed || requestId !== this.terrainRequestId) return;
+        ++this.terrainRequestId;
+        this.removeTerrainErrorListener?.();
+        this.removeTerrainErrorListener = undefined;
+        this.restoreEllipsoid(
+          'error',
+          '地形瓦片加载失败，已恢复椭球面。请检查访问权限和网络后重试。',
+        );
+      });
+      this.viewer.terrainProvider = provider;
+      this.clearSelection();
+      this.emit({ terrainStatus: 'ready', terrainError: undefined, pointer: null });
+      this.viewer.scene.requestRender();
+    } catch {
+      if (this.disposed || requestId !== this.terrainRequestId) return;
+      // Do not echo service URLs or access tokens into interface error messages.
+      this.restoreEllipsoid(
+        'error',
+        '地形服务连接失败，已使用椭球面。请检查访问凭据、权限和网络后重试。',
+      );
+    }
+  }
+
+  private restoreEllipsoid(status: TerrainStatus, error?: string) {
+    this.viewer.terrainProvider = new EllipsoidTerrainProvider();
+    this.clearSelection();
+    this.emit({ terrainStatus: status, terrainError: error, pointer: null });
     this.viewer.scene.requestRender();
   }
 
   destroy() {
     if (this.disposed) return;
     this.disposed = true;
+    ++this.terrainRequestId;
+    this.removeTerrainErrorListener?.();
     this.disposers.forEach((dispose) => dispose());
     this.input.destroy();
     this.viewer.destroy();

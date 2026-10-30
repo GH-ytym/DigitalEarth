@@ -57,12 +57,6 @@ const paths = {
       <ellipse cx="12" cy="12" rx="12" ry="5" transform="rotate(-35 12 12)" />
     </>
   ),
-  sun: (
-    <>
-      <circle cx="12" cy="12" r="4" />
-      <path d="M12 1v3m0 16v3M1 12h3m16 0h3M4 4l2 2m12 12 2 2M4 20l2-2M18 6l2-2" />
-    </>
-  ),
   grid: (
     <>
       <rect x="3" y="3" width="18" height="18" rx="2" />

@@ -1,90 +1,75 @@
 # DigitalEarth
 
-数字地球仿真展示学习与试验工程，服务于太空垃圾或碎片飞行系统的三维展示部分。当前从基础地球场景开始，后续建设真实地名查询、多目标轨迹姿态回放和外部成果展示。
+基于 CesiumJS 的数字地球仿真展示工程，提供地球浏览、图层管理和查询索引，逐步接入多目标轨迹姿态回放及外部成果展示。
 
-## 当前功能
+## 环境要求
 
-- 本地加载 Cesium 随附的 Natural Earth II 低分辨率底图，无需 Cesium ion Token。
-- 地球缩放、旋转、倾斜、初始视角、全球视角、指北复位及二维/三维切换。
-- 图层面板、底图切换、网格辅助线与昼夜光照开关。
-- 鼠标地表坐标、单击拾取标记、属性显示与清除。
-- WGS84 十进制度坐标定位及输入校验。
-- 顶部栏、左侧导航、浮动面板、右侧地图控制和底部状态栏。
+- Node.js 22 或更高版本
+- npm
+- 支持 WebGL 的现代浏览器
 
-当前地形为 **WGS84 椭球面**，拾取高度为椭球高。Natural Earth II 仅用于全球浏览，不是高分辨率卫星影像；尚未接入真实高程地形或地名查询服务。
+## 安装与运行
 
-## 本地运行
+在代码仓库根目录打开终端：
 
-环境要求：Node.js 22 或更高版本、npm、支持 WebGL 的现代浏览器。首次安装依赖需要网络，安装后场景使用本地静态资源。
-
-在 VS Code 中使用“文件 → 打开文件夹”，选择 `F:\cjy\Code\DigitalEarth\digitalEarth`。该目录就是 Git 仓库根目录，可直接作为工作区打开。
-
-```powershell
-cd F:\cjy\Code\DigitalEarth\digitalEarth\frontend
+```bash
+cd frontend
 npm ci
 npm run dev
 ```
 
-打开终端显示的地址，默认为 `http://127.0.0.1:5173/`。终端按 Ctrl+C 停止。端口被占用时会明确报错，不自动改用其他端口。
+开发地址为 `http://127.0.0.1:5173/`。按 Ctrl+C 停止服务。端口被占用时会明确报错，不自动更换端口。
 
-PowerShell 若限制运行 `npm.ps1`，可使用 `npm.cmd ci` 和 `npm.cmd run dev`，无需修改系统执行策略。
+PowerShell 如果限制执行 `npm.ps1`，将命令中的 `npm` 换成 `npm.cmd` 即可。
 
-```powershell
-# 类型检查与生产构建
+## 配置 Cesium ion 地形
+
+在 `frontend` 目录将 `.env.example` 复制为 `.env.local`，填入具有地形资源读取权限的 Cesium ion Token：
+
+```dotenv
+VITE_CESIUM_ION_TOKEN=你的Token
+```
+
+已有 `.env.local` 时直接编辑，不必覆盖。修改后重启开发服务；生产环境需重新构建。应用会通过 `createWorldTerrainAsync()` 加载 Cesium World Terrain，图层管理面板显示加载状态，并提供关闭和重试操作。
+
+未配置 Token 时使用 WGS84 椭球面。地形服务连接或瓦片加载失败时回退到椭球面，并显示错误状态，不影响本地底图浏览。
+
+`.env.local` 已由 Git 忽略。`VITE_*` 配置会进入浏览器代码，请使用适合浏览器端的专用只读 Token，并按需限制可访问资源和来源 URL；不要填入账户管理或其他服务的私密凭据。
+
+## 构建与预览
+
+以下命令在 `frontend` 目录执行：
+
+```bash
+npm run typecheck
 npm run build
-
-# 检查打包后的本地页面
 npm run preview
 ```
 
-生产构建位于 `frontend/dist/`，预览默认地址为 `http://127.0.0.1:4173/`。应通过 HTTP 服务运行，不能直接双击 `dist/index.html`。Cesium 引擎包较大，首次打包会提示分块体积；当前按一个独立引擎包处理。
+生产输出位于 `frontend/dist/`，预览地址为 `http://127.0.0.1:4173/`。通过 HTTP 服务运行页面，保留 `cesium/` 静态资源目录及相对引用。Cesium 引擎分块较大，构建可能出现包体积提示。
 
-## 工程结构
+## 当前功能
 
-```text
-frontend/
-  public/                   网站图标
-  src/
-    components/             界面通用组件
-    config/scene.ts         初始视角与资源路径
-    features/globe/         Cesium 场景与生命周期
-    features/locations/     坐标定位及后续地名查询入口
-    App.tsx                 工作台布局与可序列化界面状态
-    main.tsx                设置 Cesium 资源路径
-    bootstrap.tsx           React 启动入口
-    styles.css              工作台样式与响应布局
-  vite.config.ts            构建及 Cesium 静态资源发布
-docs/
-  development.md            架构说明、学习入口与阶段验收
-```
+- 图层管理：本地 Natural Earth II 底图、纯色地球、真实地形状态及网格辅助线。
+- 查询索引：坐标定位与输入校验；地名查询保留独立页签，服务待接入。
+- 地球浏览：缩放、旋转、倾斜、指北、初始视角、全球视角与二维/三维切换。
+- 地表坐标拾取、选中属性与相机高度显示。
+- 深蓝色工作台、白色文字和图标，以及蓝色背景的选中状态。
 
-本地项目资料与代码仓库分开放置：
+Natural Earth II 是低分辨率自然地理底图，局部放大会模糊。真实地形是独立的高程资源，配置地形不会提高底图分辨率。
 
-```text
-F:\cjy\Code\DigitalEarth\
-  digitalEarth/             Git 仓库根目录，VS Code 打开此文件夹
-    .git/
-    docs/                   随源码维护的开发说明
-    frontend/
-    README.md
-  文档资料/                 原始项目文档
-  文献/                     参考资料
-  data/                     原始数据
-  work/                     临时工作目录
-```
+## 技术说明
 
-`文档资料/`、`文献/`、`data/` 和 `work/` 保持在上级项目目录，位于 Git 仓库之外。仓库内仅维护源码、构建配置及开发说明；本机依赖和构建输出通过 `.gitignore` 排除。新增数据、凭据和临时输出不提交到仓库。
+前端采用 React 19、TypeScript 5、Vite 6 和原生 CesiumJS 1.146.0，依赖版本由锁文件固定。一个工作区保持一个 Viewer，界面通过场景控制器调用 Cesium，面板切换保留场景。
 
-## 技术基线与边界
+坐标为 WGS84 十进制度，经度在前、纬度在后；高度采用椭球高，单位为米。椭球面模式的地表高度为零；真实地形拾取使用当前加载的地形网格，精度受数据与细节层次影响。坐标定位在真实地形模式下异步采样高度，尚未取得高度时显示“待加载”。
 
-前端使用 React 19、TypeScript 5、Vite 6 和原生 CesiumJS 1.146.0，具体版本固定在 `package.json` 与 `package-lock.json`。界面操作通过场景控制器驱动一个 Viewer；面板切换不重新创建场景。当前 React 本地状态已经足够，暂不引入共享状态库。
-
-后续后端采用 Go，地名索引采用独立的 PostgreSQL/PostGIS。GeoServer/GWC、MinIO 和 ECharts 随需求阶段接入。本项目不引入实时协同、独立消息队列或分布式任务平台。
-
-轨迹、姿态、引力场和落点成果由上游提供，本工程负责接入、管理与展示；模型文件加载成功不代表已实现对应计算算法。
+后续查询后端采用 Go 与 PostgreSQL/PostGIS。轨迹、姿态、引力场及落点成果由上游提供，本工程负责接入、管理和展示。
 
 ## 参考与署名
 
-- [CesiumJS 官方快速入门](https://cesium.com/learn/cesiumjs-learn/cesiumjs-quickstart/)
-- [CesiumJS API](https://cesium.com/learn/cesiumjs/ref-doc/)
-- 底图使用 Cesium npm 包自带的 Natural Earth II 数据；运行界面保留 Cesium 署名。依赖的许可与署名随 Cesium 静态资源一同发布。
+- [CesiumJS 官方文档](https://cesium.com/learn/cesiumjs-learn/)
+- [Cesium ion Access Tokens](https://ion.cesium.com/tokens)
+- [Vite 环境变量说明](https://vite.dev/guide/env-and-mode)
+
+本地底图使用 Cesium npm 包随附的 Natural Earth II 数据。运行界面保留 Cesium 及资源提供方署名，许可与第三方说明随静态资源发布。

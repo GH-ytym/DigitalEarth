@@ -4,16 +4,22 @@ import type { IconName } from './components/Icon';
 import { GlobeViewport } from './features/globe/GlobeViewport';
 import type { SceneController } from './features/globe/SceneController';
 import { initialSnapshot } from './features/globe/types';
-import type { BasemapName, SceneSnapshot } from './features/globe/types';
-import { CoordinatePanel } from './features/locations/CoordinatePanel';
+import type { BasemapName, SceneSnapshot, TerrainStatus } from './features/globe/types';
+import { QueryPanel } from './features/locations/QueryPanel';
 
-type Panel = 'layers' | 'locate' | 'guide';
+type Panel = 'layers' | 'query';
 const navigation: Array<{ id: Panel; label: string; icon: IconName }> = [
-  { id: 'layers', label: '图层', icon: 'layers' },
-  { id: 'locate', label: '定位', icon: 'locate' },
-  { id: 'guide', label: '指南', icon: 'info' },
+  { id: 'layers', label: '图层管理', icon: 'layers' },
+  { id: 'query', label: '查询索引', icon: 'locate' },
 ];
-const panelTitles = { layers: '场景图层', locate: '坐标定位', guide: '浏览指南' };
+const panelTitles = { layers: '图层管理', query: '查询索引' };
+const terrainLabels: Record<TerrainStatus, string> = {
+  unconfigured: '未配置',
+  disabled: '已关闭',
+  loading: '加载中',
+  ready: '可用',
+  error: '加载失败',
+};
 
 function formatHeight(height: number) {
   return Math.abs(height) >= 1000
@@ -23,6 +29,9 @@ function formatHeight(height: number) {
 function coordinate(value: number, positive: string, negative: string) {
   return `${Math.abs(value).toFixed(4)}° ${value >= 0 ? positive : negative}`;
 }
+function surfaceHeight(height: number | null) {
+  return height === null ? '待加载' : `${height.toFixed(1)} m`;
+}
 
 export default function App() {
   const controller = useRef<SceneController | null>(null);
@@ -30,7 +39,6 @@ export default function App() {
   const [panel, setPanel] = useState<Panel | null>('layers');
   const [basemap, setBasemap] = useState<BasemapName>('natural');
   const [grid, setGrid] = useState(false);
-  const [lighting, setLighting] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const onReady = useCallback((value: SceneController | null) => {
     controller.current = value;
@@ -41,6 +49,9 @@ export default function App() {
     [],
   );
   const initialized = scene.status !== 'loading' && !scene.transitioning;
+  const terrainActive = scene.terrainStatus === 'ready';
+  const terrainBusy = scene.terrainStatus === 'loading';
+  const terrainName = terrainActive ? '全球高程地形' : 'WGS84 椭球面';
 
   function changeBasemap(value: BasemapName) {
     setBasemap(value);
@@ -58,55 +69,33 @@ export default function App() {
             <Icon name="orbit" size={28} />
           </span>
           <span>
-            Digital<span className="brand-accent">Earth</span>
-            <small>数字地球仿真展示</small>
+            DigitalEarth<small>数字地球仿真展示</small>
           </span>
         </a>
         <div className="header-divider" />
         <div className="breadcrumb">
           <span>工作空间</span>
           <Icon name="chevron" size={12} />
-          <strong>基础地球</strong>
+          <strong>数字地球</strong>
         </div>
-        <span className="stage-badge">
-          <i />
-          本地试验
-        </span>
-        <div className="header-actions">
-          <button onClick={() => setPanel('guide')}>
-            <Icon name="info" size={16} />
-            <span>操作指南</span>
-          </button>
-          <span className="version">V0.1</span>
-        </div>
+        <span className="version">V0.1</span>
       </header>
 
       <main className="workspace">
         <GlobeViewport onReady={onReady} onSnapshot={onSnapshot} onError={onError} />
         <nav className="navigation" aria-label="工作区功能">
-          <div className="navigation-main">
-            {navigation.map((item) => (
-              <button
-                key={item.id}
-                className={`nav-item ${panel === item.id ? 'active' : ''}`}
-                onClick={() => togglePanel(item.id)}
-                aria-pressed={panel === item.id}
-                title={item.label}
-              >
-                <Icon name={item.icon} size={21} />
-                <span>{item.label}</span>
-              </button>
-            ))}
-          </div>
-          <button
-            className="nav-item navigation-home"
-            onClick={() => controller.current?.home()}
-            disabled={!initialized}
-            title="初始视角"
-          >
-            <Icon name="home" size={21} />
-            <span>复位</span>
-          </button>
+          {navigation.map((item) => (
+            <button
+              key={item.id}
+              className={`nav-item ${panel === item.id ? 'active' : ''}`}
+              onClick={() => togglePanel(item.id)}
+              aria-pressed={panel === item.id}
+              title={item.label}
+            >
+              <Icon name={item.icon} size={22} />
+              <span>{item.label}</span>
+            </button>
+          ))}
         </nav>
 
         <div className="scene-heading">
@@ -121,10 +110,7 @@ export default function App() {
           <aside className="floating-panel main-panel" aria-label={panelTitles[panel]}>
             <div className="panel-header">
               <div>
-                <Icon
-                  name={panel === 'layers' ? 'layers' : panel === 'locate' ? 'locate' : 'info'}
-                  size={18}
-                />
+                <Icon name={panel === 'layers' ? 'layers' : 'locate'} size={18} />
                 <h2>{panelTitles[panel]}</h2>
               </div>
               <button className="icon-button" aria-label="收起面板" onClick={() => setPanel(null)}>
@@ -134,7 +120,7 @@ export default function App() {
             <div className="panel-content">
               {panel === 'layers' && (
                 <>
-                  <p className="panel-description">管理地球底图与场景显示。</p>
+                  <p className="panel-description">管理地球底图、地形与辅助图层。</p>
                   <h3 className="section-title">
                     基础底图<span className="tag">本地资源</span>
                   </h3>
@@ -145,8 +131,8 @@ export default function App() {
                       className={`basemap-card ${basemap === 'natural' ? 'selected' : ''}`}
                       onClick={() => changeBasemap('natural')}
                     >
-                      <span className="map-thumbnail natural">
-                        <Icon name="globe" size={31} />
+                      <span className="map-thumbnail">
+                        <Icon name="globe" size={29} />
                       </span>
                       <span className="basemap-text">
                         <strong>全球自然地理</strong>
@@ -160,8 +146,8 @@ export default function App() {
                       className={`basemap-card ${basemap === 'plain' ? 'selected' : ''}`}
                       onClick={() => changeBasemap('plain')}
                     >
-                      <span className="map-thumbnail plain">
-                        <Icon name="globe" size={31} />
+                      <span className="map-thumbnail">
+                        <Icon name="globe" size={29} />
                       </span>
                       <span className="basemap-text">
                         <strong>纯色地球</strong>
@@ -172,10 +158,46 @@ export default function App() {
                   </div>
                   <div className="resource-detail">
                     <span className="resource-dot" />
-                    <span>低分辨率底图 · 本地加载</span>
+                    低分辨率底图 · 本地加载
                   </div>
                   <div className="panel-divider" />
-                  <h3 className="section-title">场景显示</h3>
+                  <h3 className="section-title">
+                    地形资源<span className="tag">{terrainLabels[scene.terrainStatus]}</span>
+                  </h3>
+                  <label className="toggle-row">
+                    <span>
+                      <Icon name="globe" size={17} />
+                      真实地形
+                    </span>
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      checked={terrainActive || terrainBusy}
+                      disabled={scene.terrainStatus === 'unconfigured'}
+                      onChange={(e) => void controller.current?.setTerrainEnabled(e.target.checked)}
+                    />
+                    <span className="switch-track" />
+                  </label>
+                  <p className="quiet-description terrain-description" role="status">
+                    {scene.terrainStatus === 'unconfigured' &&
+                      '未配置地形服务，当前使用 WGS84 椭球面。'}
+                    {scene.terrainStatus === 'disabled' &&
+                      '真实地形已关闭，当前使用 WGS84 椭球面。'}
+                    {terrainBusy && '正在连接地形服务，完成后显示真实高程起伏。'}
+                    {terrainActive && 'Cesium World Terrain · 高度采用 WGS84 椭球高。'}
+                    {scene.terrainStatus === 'error' && scene.terrainError}
+                  </p>
+                  {scene.terrainStatus === 'error' && (
+                    <button
+                      className="text-button"
+                      onClick={() => void controller.current?.setTerrainEnabled(true)}
+                    >
+                      重试加载
+                      <Icon name="arrow" size={15} />
+                    </button>
+                  )}
+                  <div className="panel-divider" />
+                  <h3 className="section-title">辅助图层</h3>
                   <label className="toggle-row">
                     <span>
                       <Icon name="grid" size={17} />
@@ -192,80 +214,23 @@ export default function App() {
                     />
                     <span className="switch-track" />
                   </label>
-                  <label className="toggle-row">
-                    <span>
-                      <Icon name="sun" size={17} />
-                      昼夜光照
-                    </span>
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      checked={lighting}
-                      onChange={(e) => {
-                        setLighting(e.target.checked);
-                        controller.current?.setLighting(e.target.checked);
-                      }}
-                    />
-                    <span className="switch-track" />
-                  </label>
-                  <div className="panel-divider" />
-                  <h3 className="section-title">
-                    地形基准<span className="tag muted">椭球面</span>
-                  </h3>
-                  <p className="quiet-description">
-                    当前使用 WGS84 椭球，尚未接入真实高程地形。地表拾取高度为椭球高。
-                  </p>
-                  <button className="text-button" onClick={() => setPanel('locate')}>
-                    使用坐标定位
-                    <Icon name="arrow" size={15} />
-                  </button>
                 </>
               )}
-              {panel === 'locate' && (
-                <CoordinatePanel
+              {panel === 'query' && (
+                <QueryPanel
                   onLocate={(lon, lat, altitude) => controller.current?.locate(lon, lat, altitude)}
                   disabled={!initialized}
                 />
               )}
-              {panel === 'guide' && (
-                <>
-                  <p className="panel-description">从地球浏览开始，熟悉三维场景操作。</p>
-                  <div className="guide-list">
-                    <div>
-                      <span className="keycap">左键拖动</span>
-                      <span>旋转 / 平移地球</span>
-                    </div>
-                    <div>
-                      <span className="keycap">滚轮</span>
-                      <span>缩放视角</span>
-                    </div>
-                    <div>
-                      <span className="keycap">中键拖动</span>
-                      <span>旋转 / 倾斜视角</span>
-                    </div>
-                    <div>
-                      <span className="keycap">左键单击</span>
-                      <span>拾取地表坐标</span>
-                    </div>
-                  </div>
-                  <div className="panel-divider" />
-                  <h3 className="section-title">
-                    当前阶段<span className="tag">01 / 基础地球</span>
-                  </h3>
-                  <p className="quiet-description">
-                    已接入本地底图、视角控制、图层显示和坐标定位。下一阶段建设真实地名查询。
-                  </p>
-                  <p className="quiet-description">
-                    所有面板共用一个三维场景。切换和收起面板会保留当前视角与选中位置。
-                  </p>
-                </>
-              )}
             </div>
             <div className="panel-footer">
               <span className="resource-dot" />
-              场景状态
-              {scene.status === 'ready' ? '正常' : scene.status === 'loading' ? '初始化中' : '异常'}
-              <span>CESIUMJS</span>
+              {scene.status === 'ready'
+                ? '场景就绪'
+                : scene.status === 'loading'
+                  ? '场景初始化中'
+                  : '场景异常'}
+              <span>{scene.mode}</span>
             </div>
           </aside>
         )}
@@ -301,7 +266,7 @@ export default function App() {
                   </div>
                   <div>
                     <dt>椭球高</dt>
-                    <dd>{scene.selection.height.toFixed(1)} m</dd>
+                    <dd>{surfaceHeight(scene.selection.height)}</dd>
                   </div>
                   <div>
                     <dt>坐标基准</dt>
@@ -320,7 +285,7 @@ export default function App() {
                   </div>
                   <div>
                     <dt>地形资源</dt>
-                    <dd>椭球面</dd>
+                    <dd>{terrainName}</dd>
                   </div>
                   <div>
                     <dt>场景模式</dt>
@@ -396,6 +361,14 @@ export default function App() {
           </div>
           <div className="control-group">
             <button
+              aria-label="初始视角"
+              title="初始视角"
+              onClick={() => controller.current?.home()}
+              disabled={!initialized}
+            >
+              <Icon name="home" />
+            </button>
+            <button
               aria-label="全球视角"
               title="全球视角"
               onClick={() => controller.current?.globalView()}
@@ -414,16 +387,6 @@ export default function App() {
           </div>
         </div>
 
-        <div className="scene-shortcuts">
-          <button onClick={() => controller.current?.globalView()} disabled={!initialized}>
-            <Icon name="globe" size={15} />
-            全球视角
-          </button>
-          <button onClick={() => controller.current?.home()} disabled={!initialized}>
-            <Icon name="home" size={15} />
-            初始视角
-          </button>
-        </div>
         <div className="mouse-hint">
           <Icon name="mouse" size={14} />
           <span>
@@ -431,7 +394,6 @@ export default function App() {
             单击拾取
           </span>
         </div>
-
         {scene.status === 'loading' && (
           <div className="scene-message" role="status">
             <span className="loading-ring" />
@@ -453,7 +415,7 @@ export default function App() {
 
       <footer className="statusbar">
         <div className="scene-status">
-          <span className={`status-dot ${scene.status}`} />
+          <span className="status-dot" />
           {scene.status === 'ready'
             ? '场景就绪'
             : scene.status === 'loading'
@@ -469,7 +431,7 @@ export default function App() {
             纬度 <b>{scene.pointer ? coordinate(scene.pointer.latitude, 'N', 'S') : '—'}</b>
           </span>
           <span className="pointer-height">
-            椭球高 <b>{scene.pointer ? `${scene.pointer.height.toFixed(1)} m` : '—'}</b>
+            椭球高 <b>{scene.pointer ? surfaceHeight(scene.pointer.height) : '—'}</b>
           </span>
         </div>
         <div className="status-right">

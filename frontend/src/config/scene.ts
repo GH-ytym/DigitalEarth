@@ -5,4 +5,5 @@ export const sceneConfig = {
   cesiumBaseUrl: `${import.meta.env.BASE_URL}cesium/`,
   imageryName: 'Natural Earth II',
   imageryDescription: 'Cesium 随附的全球低分辨率底图',
+  ionToken: import.meta.env.VITE_CESIUM_ION_TOKEN?.trim() ?? '',
 } as const;

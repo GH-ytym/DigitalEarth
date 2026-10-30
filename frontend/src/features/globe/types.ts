@@ -1,9 +1,10 @@
 export type SceneModeName = '3D' | '2D';
 export type BasemapName = 'natural' | 'plain';
+export type TerrainStatus = 'unconfigured' | 'disabled' | 'loading' | 'ready' | 'error';
 export interface GeoPosition {
   longitude: number;
   latitude: number;
-  height: number;
+  height: number | null;
 }
 export interface SceneSnapshot {
   status: 'loading' | 'ready' | 'error';
@@ -14,6 +15,8 @@ export interface SceneSnapshot {
   transitioning: boolean;
   pointer: GeoPosition | null;
   selection: GeoPosition | null;
+  terrainStatus: TerrainStatus;
+  terrainError?: string;
 }
 export const initialSnapshot: SceneSnapshot = {
   status: 'loading',
@@ -23,4 +26,5 @@ export const initialSnapshot: SceneSnapshot = {
   transitioning: false,
   pointer: null,
   selection: null,
+  terrainStatus: 'unconfigured',
 };
