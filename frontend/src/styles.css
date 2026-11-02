@@ -291,11 +291,6 @@ a {
   padding: 3px 6px;
   font-weight: 400;
 }
-.basemap-list {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-}
 .basemap-card {
   display: flex;
   align-items: center;
@@ -306,13 +301,6 @@ a {
   padding: 10px;
   text-align: left;
   min-height: 70px;
-}
-.basemap-card:hover {
-  background: var(--hover);
-}
-.basemap-card.selected {
-  border-color: #3678c3;
-  background: var(--selected);
 }
 .map-thumbnail {
   border-radius: 4px;
@@ -335,20 +323,6 @@ a {
 }
 .basemap-text small {
   font-size: 10px;
-}
-.radio-indicator {
-  width: 15px;
-  height: 15px;
-  border: 1px solid #ffffff;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-}
-.radio-indicator span {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #ffffff;
 }
 .resource-detail {
   display: flex;

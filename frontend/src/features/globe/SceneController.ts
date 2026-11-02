@@ -3,37 +3,36 @@ import {
   Cartesian3,
   Cartographic,
   Color,
+  createWorldImageryAsync,
   createWorldTerrainAsync,
   EllipsoidTerrainProvider,
   GridImageryProvider,
   HeightReference,
   ImageryLayer,
   Ion,
+  IonWorldImageryStyle,
   LabelStyle,
   Math as CesiumMath,
   SceneMode,
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
   sampleTerrainMostDetailed,
-  TileMapServiceImageryProvider,
   VerticalOrigin,
   Viewer,
 } from 'cesium';
 import { sceneConfig } from '../../config/scene';
 import { initialSnapshot } from './types';
-import type { BasemapName, GeoPosition, SceneSnapshot, TerrainStatus } from './types';
+import type { GeoPosition, SceneSnapshot, TerrainStatus } from './types';
 
 /** Owns the Viewer and all Cesium resources. React only receives serializable data. */
 export class SceneController {
   private readonly viewer: Viewer;
   private readonly input: ScreenSpaceEventHandler;
   private readonly disposers: Array<() => void> = [];
-  private naturalLayer?: ImageryLayer;
   private gridLayer?: ImageryLayer;
   private disposed = false;
   private snapshot = { ...initialSnapshot };
   private lastPointerUpdate = 0;
-  private selectedBasemap: BasemapName = 'natural';
   private requestedGrid = false;
   private terrainRequestId = 0;
   private selectionRevision = 0;
@@ -103,6 +102,15 @@ export class SceneController {
       }),
     );
     this.updateCamera();
+    this.gridLayer = this.viewer.imageryLayers.addImageryProvider(
+      new GridImageryProvider({
+        cells: 8,
+        color: Color.WHITE.withAlpha(0.24),
+        glowColor: Color.TRANSPARENT,
+        backgroundColor: Color.TRANSPARENT,
+      }),
+    );
+    this.gridLayer.show = this.requestedGrid;
     void this.loadImagery();
     void this.setTerrainEnabled(true);
   }
@@ -114,39 +122,32 @@ export class SceneController {
   }
 
   private async loadImagery() {
+    if (!sceneConfig.ionToken) {
+      this.emit({
+        status: 'error',
+        error: '未配置 Cesium ion Token，无法加载全球影像。请在 .env.local 中配置后重启服务。',
+      });
+      return;
+    }
     try {
-      const provider = await TileMapServiceImageryProvider.fromUrl(
-        `${sceneConfig.cesiumBaseUrl}Assets/Textures/NaturalEarthII`,
-      );
-      // A StrictMode cleanup or unmount may happen while the image manifest loads.
+      const provider = await createWorldImageryAsync({ style: IonWorldImageryStyle.AERIAL });
+      // A StrictMode cleanup or unmount may happen while ion metadata loads.
       if (this.disposed) return;
-      this.naturalLayer = this.viewer.imageryLayers.addImageryProvider(provider);
-      this.naturalLayer.brightness = 0.9;
-      this.naturalLayer.contrast = 1.1;
-      this.naturalLayer.show = this.selectedBasemap === 'natural';
+      this.viewer.imageryLayers.addImageryProvider(provider, 0);
       this.disposers.push(
         provider.errorEvent.addEventListener(() => {
           this.emit({
             status: 'error',
-            error: '本地底图瓦片加载失败，请检查 Cesium 静态资源路径后重试。',
+            error: '全球影像瓦片加载失败，请检查 Cesium ion Token 的影像读取权限和网络后重试。',
           });
         }),
       );
-      this.gridLayer = this.viewer.imageryLayers.addImageryProvider(
-        new GridImageryProvider({
-          cells: 8,
-          color: Color.WHITE.withAlpha(0.24),
-          glowColor: Color.TRANSPARENT,
-          backgroundColor: Color.TRANSPARENT,
-        }),
-      );
-      this.gridLayer.show = this.requestedGrid;
       this.emit({ status: 'ready', error: undefined });
       this.viewer.scene.requestRender();
-    } catch (error) {
+    } catch {
       this.emit({
         status: 'error',
-        error: `底图初始化失败：${error instanceof Error ? error.message : '未知错误'}`,
+        error: '全球影像服务连接失败，请检查 Cesium ion Token 的影像读取权限和网络后重试。',
       });
     }
   }
@@ -296,12 +297,6 @@ export class SceneController {
     if (this.viewer.scene.mode === SceneMode.MORPHING || this.snapshot.mode === mode) return;
     if (mode === '2D') this.viewer.scene.morphTo2D(0.6);
     else this.viewer.scene.morphTo3D(0.6);
-  }
-
-  setBasemap(name: BasemapName) {
-    this.selectedBasemap = name;
-    if (this.naturalLayer) this.naturalLayer.show = name === 'natural';
-    this.viewer.scene.requestRender();
   }
 
   setGrid(show: boolean) {

@@ -22,17 +22,19 @@ npm run dev
 
 PowerShell 如果限制执行 `npm.ps1`，将命令中的 `npm` 换成 `npm.cmd` 即可。
 
-## 配置 Cesium ion 地形
+## 配置 Cesium ion 影像与地形
 
-在 `frontend` 目录将 `.env.example` 复制为 `.env.local`，填入具有地形资源读取权限的 Cesium ion Token：
+在 `frontend` 目录将 `.env.example` 复制为 `.env.local`，填入具有全球影像（资产 2）和全球地形（资产 1）读取权限的 Cesium ion Token：
 
 ```dotenv
 VITE_CESIUM_ION_TOKEN=你的Token
 ```
 
-已有 `.env.local` 时直接编辑，不必覆盖。修改后重启开发服务；生产环境需重新构建。应用会通过 `createWorldTerrainAsync()` 加载 Cesium World Terrain，图层管理面板显示加载状态，并提供关闭和重试操作。
+已有 `.env.local` 时直接编辑，不必覆盖。修改后重启开发服务；生产环境需重新构建。
 
-未配置 Token 时使用 WGS84 椭球面。地形服务连接或瓦片加载失败时回退到椭球面，并显示错误状态，不影响本地底图浏览。
+应用通过 `createWorldImageryAsync({ style: IonWorldImageryStyle.AERIAL })` 加载 Cesium World Imagery，作为默认全球影像底图。未配置 Token、权限不足或网络连接失败时显示错误，可在修正后点击“重新加载”。不再加载 Natural Earth II，也不自动切换其他底图。
+
+地形独立通过 `createWorldTerrainAsync()` 加载 Cesium World Terrain，图层管理面板提供关闭和重试操作。未配置 Token 时使用 WGS84 椭球面；地形服务连接或瓦片加载失败时回退到椭球面，不影响已加载的全球影像。
 
 `.env.local` 已由 Git 忽略。`VITE_*` 配置会进入浏览器代码，请使用适合浏览器端的专用只读 Token，并按需限制可访问资源和来源 URL；不要填入账户管理或其他服务的私密凭据。
 
@@ -50,13 +52,13 @@ npm run preview
 
 ## 当前功能
 
-- 图层管理：本地 Natural Earth II 底图、纯色地球、真实地形状态及网格辅助线。
+- 图层管理：Cesium ion 全球卫星影像、真实地形状态及网格辅助线。
 - 查询索引：坐标定位与输入校验；地名查询保留独立页签，服务待接入。
 - 地球浏览：缩放、旋转、倾斜、指北、初始视角、全球视角与二维/三维切换。
 - 地表坐标拾取、选中属性与相机高度显示。
 - 深蓝色工作台、白色文字和图标，以及蓝色背景的选中状态。
 
-Natural Earth II 是低分辨率自然地理底图，局部放大会模糊。真实地形是独立的高程资源，配置地形不会提高底图分辨率。
+全球影像与真实地形是独立资源。影像显示地表纹理，地形提供高程起伏，两者需要分别具备访问权限。
 
 ## 技术说明
 
@@ -72,4 +74,4 @@ Natural Earth II 是低分辨率自然地理底图，局部放大会模糊。真
 - [Cesium ion Access Tokens](https://ion.cesium.com/tokens)
 - [Vite 环境变量说明](https://vite.dev/guide/env-and-mode)
 
-本地底图使用 Cesium npm 包随附的 Natural Earth II 数据。运行界面保留 Cesium 及资源提供方署名，许可与第三方说明随静态资源发布。
+全球影像及地形通过 Cesium ion 访问。运行界面保留 Cesium 及资源提供方署名，许可与第三方说明随静态资源发布。

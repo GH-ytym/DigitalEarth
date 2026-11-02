@@ -1,5 +1,4 @@
 export type SceneModeName = '3D' | '2D';
-export type BasemapName = 'natural' | 'plain';
 export type TerrainStatus = 'unconfigured' | 'disabled' | 'loading' | 'ready' | 'error';
 export interface GeoPosition {
   longitude: number;

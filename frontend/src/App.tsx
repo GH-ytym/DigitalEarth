@@ -1,10 +1,11 @@
 import { useCallback, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
+import { sceneConfig } from './config/scene';
 import type { IconName } from './components/Icon';
 import { GlobeViewport } from './features/globe/GlobeViewport';
 import type { SceneController } from './features/globe/SceneController';
 import { initialSnapshot } from './features/globe/types';
-import type { BasemapName, SceneSnapshot, TerrainStatus } from './features/globe/types';
+import type { SceneSnapshot, TerrainStatus } from './features/globe/types';
 import { QueryPanel } from './features/locations/QueryPanel';
 
 type Panel = 'layers' | 'query';
@@ -37,7 +38,6 @@ export default function App() {
   const controller = useRef<SceneController | null>(null);
   const [scene, setScene] = useState<SceneSnapshot>(initialSnapshot);
   const [panel, setPanel] = useState<Panel | null>('layers');
-  const [basemap, setBasemap] = useState<BasemapName>('natural');
   const [grid, setGrid] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const onReady = useCallback((value: SceneController | null) => {
@@ -53,10 +53,6 @@ export default function App() {
   const terrainBusy = scene.terrainStatus === 'loading';
   const terrainName = terrainActive ? '全球高程地形' : 'WGS84 椭球面';
 
-  function changeBasemap(value: BasemapName) {
-    setBasemap(value);
-    controller.current?.setBasemap(value);
-  }
   function togglePanel(value: Panel) {
     setPanel((current) => (current === value ? null : value));
   }
@@ -122,43 +118,20 @@ export default function App() {
                 <>
                   <p className="panel-description">管理地球底图、地形与辅助图层。</p>
                   <h3 className="section-title">
-                    基础底图<span className="tag">本地资源</span>
+                    基础底图<span className="tag">Cesium ion</span>
                   </h3>
-                  <div className="basemap-list" role="radiogroup" aria-label="基础底图">
-                    <button
-                      role="radio"
-                      aria-checked={basemap === 'natural'}
-                      className={`basemap-card ${basemap === 'natural' ? 'selected' : ''}`}
-                      onClick={() => changeBasemap('natural')}
-                    >
-                      <span className="map-thumbnail">
-                        <Icon name="globe" size={29} />
-                      </span>
-                      <span className="basemap-text">
-                        <strong>全球自然地理</strong>
-                        <small>Natural Earth II</small>
-                      </span>
-                      <span className="radio-indicator">{basemap === 'natural' && <span />}</span>
-                    </button>
-                    <button
-                      role="radio"
-                      aria-checked={basemap === 'plain'}
-                      className={`basemap-card ${basemap === 'plain' ? 'selected' : ''}`}
-                      onClick={() => changeBasemap('plain')}
-                    >
-                      <span className="map-thumbnail">
-                        <Icon name="globe" size={29} />
-                      </span>
-                      <span className="basemap-text">
-                        <strong>纯色地球</strong>
-                        <small>WGS84 椭球</small>
-                      </span>
-                      <span className="radio-indicator">{basemap === 'plain' && <span />}</span>
-                    </button>
+                  <div className="basemap-card">
+                    <span className="map-thumbnail">
+                      <Icon name="globe" size={29} />
+                    </span>
+                    <span className="basemap-text">
+                      <strong>{sceneConfig.imageryName}</strong>
+                      <small>{sceneConfig.imageryDescription}</small>
+                    </span>
                   </div>
                   <div className="resource-detail">
                     <span className="resource-dot" />
-                    低分辨率底图 · 本地加载
+                    全球影像 · 在线加载
                   </div>
                   <div className="panel-divider" />
                   <h3 className="section-title">
@@ -397,7 +370,7 @@ export default function App() {
         {scene.status === 'loading' && (
           <div className="scene-message" role="status">
             <span className="loading-ring" />
-            正在准备三维场景与本地底图…
+            正在准备三维场景与全球影像…
           </div>
         )}
         {scene.status === 'error' && (
@@ -406,7 +379,6 @@ export default function App() {
             <div>
               <strong>场景资源加载异常</strong>
               <p>{scene.error}</p>
-              <p>请检查浏览器 WebGL 支持和静态资源路径。</p>
             </div>
             <button onClick={() => window.location.reload()}>重新加载</button>
           </div>
