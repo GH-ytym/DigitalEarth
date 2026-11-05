@@ -53,12 +53,33 @@ npm run preview
 ## 当前功能
 
 - 图层管理：Cesium ion 全球卫星影像、真实地形状态及网格辅助线。
-- 查询索引：坐标定位与输入校验；地名查询保留独立页签，服务待接入。
+- 查询索引：真实 GeoNames 地名搜索、归属层级候选、键盘选择、地图定位，以及独立的坐标定位页签。
 - 地球浏览：缩放、旋转、倾斜、指北、初始视角、全球视角与二维/三维切换。
 - 地表坐标拾取、选中属性与相机高度显示。
 - 深蓝色工作台、白色文字和图标，以及蓝色背景的选中状态。
 
 全球影像与真实地形是独立资源。影像显示地表纹理，地形提供高程起伏，两者需要分别具备访问权限。
+
+## 本地地名数据库
+
+已提供独立 Docker Compose PostgreSQL/PostGIS 数据库、Go 导入程序、HTTP 查询服务和前端地名查询。数据库默认仅监听 `127.0.0.1:55432`，API 仅监听 `127.0.0.1:8080`，地名数据保存在独立持久卷中。API 使用独立只读账号。
+
+在仓库根目录运行以下 PowerShell 命令，需要 Docker Desktop 的 Linux 引擎：
+
+```powershell
+.\infra\Initialize-LocalDatabase.ps1
+docker compose up -d --wait db
+docker compose build gazetteer
+docker compose run --rm gazetteer import --report /reports/import.json
+docker compose run --rm gazetteer setup-reader
+docker compose up -d --wait api
+docker compose run --rm gazetteer query --q "北京" --limit 6
+docker compose run --rm gazetteer verify --report /reports/verification.json
+```
+
+默认读取仓库外 `../data/geonames/20261021` 已有四个文件，原件只读挂载。配置、导入规则、数据边界及维护方式见 [本地地名数据库说明](docs/geonames-local-search.md)，实际验证结果见 [GeoNames 验证记录](docs/geonames-validation.md)。
+
+已初始化并导入后，日常只需 `docker compose up -d --wait db api`，再启动前端开发服务。进入“查询索引 → 地名查询”输入地名；候选第二行显示标准名称、一级行政区和国家，点击后定位。输入至少两个有效字符，支持精确与前缀匹配。前端开发和生产预览均通过相对路径 `/api` 转发到本机 API。
 
 ## 技术说明
 
@@ -66,7 +87,7 @@ npm run preview
 
 坐标为 WGS84 十进制度，经度在前、纬度在后；高度采用椭球高，单位为米。椭球面模式的地表高度为零；真实地形拾取使用当前加载的地形网格，精度受数据与细节层次影响。坐标定位在真实地形模式下异步采样高度，尚未取得高度时显示“待加载”。
 
-后续查询后端采用 Go 与 PostgreSQL/PostGIS。轨迹、姿态、引力场及落点成果由上游提供，本工程负责接入、管理和展示。
+地名数据准备和查询采用 Go 与 PostgreSQL/PostGIS，前端通过 HTTP 接口读取候选。当前归属信息包含国家和一级行政区，不代表完整的全球市县行政区划。轨迹、姿态、引力场及落点成果由上游提供，本工程负责接入、管理和展示。
 
 ## 参考与署名
 

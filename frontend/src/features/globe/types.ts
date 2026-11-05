@@ -1,9 +1,14 @@
+import type { PlaceResult } from '../locations/types';
+
 export type SceneModeName = '3D' | '2D';
 export type TerrainStatus = 'unconfigured' | 'disabled' | 'loading' | 'ready' | 'error';
 export interface GeoPosition {
   longitude: number;
   latitude: number;
   height: number | null;
+}
+export interface SelectedPosition extends GeoPosition {
+  place?: PlaceResult;
 }
 export interface SceneSnapshot {
   status: 'loading' | 'ready' | 'error';
@@ -13,7 +18,7 @@ export interface SceneSnapshot {
   mode: SceneModeName;
   transitioning: boolean;
   pointer: GeoPosition | null;
-  selection: GeoPosition | null;
+  selection: SelectedPosition | null;
   terrainStatus: TerrainStatus;
   terrainError?: string;
 }

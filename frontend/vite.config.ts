@@ -7,6 +7,10 @@ const cesiumRoot = normalizePath(
   fileURLToPath(new URL('./node_modules/cesium/Build/Cesium/', import.meta.url)),
 );
 
+const apiProxy = {
+  '/api': { target: process.env.DIGITALEARTH_API_TARGET || 'http://127.0.0.1:8080' },
+};
+
 export default defineConfig({
   base: './',
   plugins: [
@@ -25,8 +29,8 @@ export default defineConfig({
         ),
     }),
   ],
-  server: { port: 5173, strictPort: true },
-  preview: { port: 4173, strictPort: true },
+  server: { port: 5173, strictPort: true, proxy: apiProxy },
+  preview: { port: 4173, strictPort: true, proxy: apiProxy },
   build: {
     chunkSizeWarningLimit: 1600,
     rollupOptions: {

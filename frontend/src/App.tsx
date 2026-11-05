@@ -7,6 +7,7 @@ import type { SceneController } from './features/globe/SceneController';
 import { initialSnapshot } from './features/globe/types';
 import type { SceneSnapshot, TerrainStatus } from './features/globe/types';
 import { QueryPanel } from './features/locations/QueryPanel';
+import { placeCameraHeight, placeHierarchy, placeKindLabel } from './features/locations/types';
 
 type Panel = 'layers' | 'query';
 const navigation: Array<{ id: Panel; label: string; icon: IconName }> = [
@@ -37,7 +38,7 @@ function surfaceHeight(height: number | null) {
 export default function App() {
   const controller = useRef<SceneController | null>(null);
   const [scene, setScene] = useState<SceneSnapshot>(initialSnapshot);
-  const [panel, setPanel] = useState<Panel | null>('layers');
+  const [panel, setPanel] = useState<Panel | null>('query');
   const [grid, setGrid] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const onReady = useCallback((value: SceneController | null) => {
@@ -102,118 +103,122 @@ export default function App() {
           </h1>
         </div>
 
-        {panel && (
-          <aside className="floating-panel main-panel" aria-label={panelTitles[panel]}>
-            <div className="panel-header">
-              <div>
-                <Icon name={panel === 'layers' ? 'layers' : 'locate'} size={18} />
-                <h2>{panelTitles[panel]}</h2>
-              </div>
-              <button className="icon-button" aria-label="收起面板" onClick={() => setPanel(null)}>
-                <Icon name="close" size={16} />
-              </button>
+        <aside className={`floating-panel main-panel ${panel === 'query' ? 'query-panel' : ''}`} hidden={!panel} aria-label={panelTitles[panel ?? 'layers']}>
+          <div className="panel-header">
+            <div>
+              <Icon name={panel === 'layers' ? 'layers' : 'locate'} size={18} />
+              <h2>{panelTitles[panel ?? 'layers']}</h2>
             </div>
-            <div className="panel-content">
-              {panel === 'layers' && (
-                <>
-                  <p className="panel-description">管理地球底图、地形与辅助图层。</p>
-                  <h3 className="section-title">
-                    基础底图<span className="tag">Cesium ion</span>
-                  </h3>
-                  <div className="basemap-card">
-                    <span className="map-thumbnail">
-                      <Icon name="globe" size={29} />
-                    </span>
-                    <span className="basemap-text">
-                      <strong>{sceneConfig.imageryName}</strong>
-                      <small>{sceneConfig.imageryDescription}</small>
-                    </span>
-                  </div>
-                  <div className="resource-detail">
-                    <span className="resource-dot" />
-                    全球影像 · 在线加载
-                  </div>
-                  <div className="panel-divider" />
-                  <h3 className="section-title">
-                    地形资源<span className="tag">{terrainLabels[scene.terrainStatus]}</span>
-                  </h3>
-                  <label className="toggle-row">
-                    <span>
-                      <Icon name="globe" size={17} />
-                      真实地形
-                    </span>
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      checked={terrainActive || terrainBusy}
-                      disabled={scene.terrainStatus === 'unconfigured'}
-                      onChange={(e) => void controller.current?.setTerrainEnabled(e.target.checked)}
-                    />
-                    <span className="switch-track" />
-                  </label>
-                  <p className="quiet-description terrain-description" role="status">
-                    {scene.terrainStatus === 'unconfigured' &&
-                      '未配置地形服务，当前使用 WGS84 椭球面。'}
-                    {scene.terrainStatus === 'disabled' &&
-                      '真实地形已关闭，当前使用 WGS84 椭球面。'}
-                    {terrainBusy && '正在连接地形服务，完成后显示真实高程起伏。'}
-                    {terrainActive && 'Cesium World Terrain · 高度采用 WGS84 椭球高。'}
-                    {scene.terrainStatus === 'error' && scene.terrainError}
-                  </p>
-                  {scene.terrainStatus === 'error' && (
-                    <button
-                      className="text-button"
-                      onClick={() => void controller.current?.setTerrainEnabled(true)}
-                    >
-                      重试加载
-                      <Icon name="arrow" size={15} />
-                    </button>
-                  )}
-                  <div className="panel-divider" />
-                  <h3 className="section-title">辅助图层</h3>
-                  <label className="toggle-row">
-                    <span>
-                      <Icon name="grid" size={17} />
-                      网格辅助线
-                    </span>
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      checked={grid}
-                      onChange={(e) => {
-                        setGrid(e.target.checked);
-                        controller.current?.setGrid(e.target.checked);
-                      }}
-                    />
-                    <span className="switch-track" />
-                  </label>
-                </>
-              )}
-              {panel === 'query' && (
-                <QueryPanel
-                  onLocate={(lon, lat, altitude) => controller.current?.locate(lon, lat, altitude)}
-                  disabled={!initialized}
-                />
-              )}
+            <button className="icon-button" aria-label="收起面板" onClick={() => setPanel(null)}>
+              <Icon name="close" size={16} />
+            </button>
+          </div>
+          <div className="panel-content">
+            {panel === 'layers' && (
+              <>
+                <p className="panel-description">管理地球底图、地形与辅助图层。</p>
+                <h3 className="section-title">
+                  基础底图<span className="tag">Cesium ion</span>
+                </h3>
+                <div className="basemap-card">
+                  <span className="map-thumbnail">
+                    <Icon name="globe" size={29} />
+                  </span>
+                  <span className="basemap-text">
+                    <strong>{sceneConfig.imageryName}</strong>
+                    <small>{sceneConfig.imageryDescription}</small>
+                  </span>
+                </div>
+                <div className="resource-detail">
+                  <span className="resource-dot" />
+                  全球影像 · 在线加载
+                </div>
+                <div className="panel-divider" />
+                <h3 className="section-title">
+                  地形资源<span className="tag">{terrainLabels[scene.terrainStatus]}</span>
+                </h3>
+                <label className="toggle-row">
+                  <span>
+                    <Icon name="globe" size={17} />
+                    真实地形
+                  </span>
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    checked={terrainActive || terrainBusy}
+                    disabled={scene.terrainStatus === 'unconfigured'}
+                    onChange={(e) => void controller.current?.setTerrainEnabled(e.target.checked)}
+                  />
+                  <span className="switch-track" />
+                </label>
+                <p className="quiet-description terrain-description" role="status">
+                  {scene.terrainStatus === 'unconfigured' &&
+                    '未配置地形服务，当前使用 WGS84 椭球面。'}
+                  {scene.terrainStatus === 'disabled' &&
+                    '真实地形已关闭，当前使用 WGS84 椭球面。'}
+                  {terrainBusy && '正在连接地形服务，完成后显示真实高程起伏。'}
+                  {terrainActive && 'Cesium World Terrain · 高度采用 WGS84 椭球高。'}
+                  {scene.terrainStatus === 'error' && scene.terrainError}
+                </p>
+                {scene.terrainStatus === 'error' && (
+                  <button
+                    className="text-button"
+                    onClick={() => void controller.current?.setTerrainEnabled(true)}
+                  >
+                    重试加载
+                    <Icon name="arrow" size={15} />
+                  </button>
+                )}
+                <div className="panel-divider" />
+                <h3 className="section-title">辅助图层</h3>
+                <label className="toggle-row">
+                  <span>
+                    <Icon name="grid" size={17} />
+                    网格辅助线
+                  </span>
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    checked={grid}
+                    onChange={(e) => {
+                      setGrid(e.target.checked);
+                      controller.current?.setGrid(e.target.checked);
+                    }}
+                  />
+                  <span className="switch-track" />
+                </label>
+              </>
+            )}
+            <div hidden={panel !== 'query'}>
+              <QueryPanel
+                onLocate={(lon, lat, altitude) => controller.current?.locate(lon, lat, altitude)}
+                disabled={!initialized}
+                active={panel === 'query'}
+                selectedPlaceId={scene.selection?.place?.geoname_id}
+                onSelectPlace={(place) => {
+                  controller.current?.locate(place.longitude, place.latitude, placeCameraHeight(place), place);
+                  setInspectorOpen(true);
+                }}
+              />
             </div>
-            <div className="panel-footer">
-              <span className="resource-dot" />
-              {scene.status === 'ready'
-                ? '场景就绪'
-                : scene.status === 'loading'
-                  ? '场景初始化中'
-                  : '场景异常'}
-              <span>{scene.mode}</span>
-            </div>
-          </aside>
-        )}
+          </div>
+          <div className="panel-footer">
+            <span className="resource-dot" />
+            {scene.status === 'ready'
+              ? '场景就绪'
+              : scene.status === 'loading'
+                ? '场景初始化中'
+                : '场景异常'}
+            <span>{scene.mode}</span>
+          </div>
+        </aside>
 
         {inspectorOpen && (
           <aside className="floating-panel inspector" aria-label="场景信息">
             <div className="panel-header">
               <div>
                 <Icon name="pin" size={17} />
-                <h2>{scene.selection ? '选中位置' : '场景信息'}</h2>
+                <h2>{scene.selection?.place ? '地点信息' : scene.selection ? '选中位置' : '场景信息'}</h2>
               </div>
               <button
                 className="icon-button"
@@ -229,6 +234,15 @@ export default function App() {
               </span>
               {scene.selection ? (
                 <dl>
+                  {scene.selection.place && (
+                    <>
+                      <div><dt>名称</dt><dd>{scene.selection.place.name}</dd></div>
+                      <div><dt>类型</dt><dd>{placeKindLabel(scene.selection.place)}</dd></div>
+                      <div><dt>归属</dt><dd className="place-inspector-hierarchy">{placeHierarchy(scene.selection.place)}</dd></div>
+                      <div><dt>地点编号</dt><dd>{scene.selection.place.geoname_id}</dd></div>
+                      <div><dt>来源</dt><dd>GeoNames</dd></div>
+                    </>
+                  )}
                   <div>
                     <dt>经度</dt>
                     <dd>{coordinate(scene.selection.longitude, 'E', 'W')}</dd>
@@ -265,6 +279,9 @@ export default function App() {
                     <dd>{scene.mode}</dd>
                   </div>
                 </dl>
+              )}
+              {scene.selection?.place?.approximate_representative_point && (
+                <p className="inspector-hint">此位置为近似代表点。</p>
               )}
               {scene.selection ? (
                 <button

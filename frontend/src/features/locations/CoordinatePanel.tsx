@@ -7,7 +7,7 @@ interface Props {
   disabled: boolean;
 }
 
-/** Coordinate navigation is available now; real place search will use the future Go API. */
+/** WGS84 coordinate navigation shares the scene controller with place search. */
 export function CoordinatePanel({ onLocate, disabled }: Props) {
   const [longitude, setLongitude] = useState('116.4074');
   const [latitude, setLatitude] = useState('39.9042');

@@ -22,7 +22,8 @@ import {
 } from 'cesium';
 import { sceneConfig } from '../../config/scene';
 import { initialSnapshot } from './types';
-import type { GeoPosition, SceneSnapshot, TerrainStatus } from './types';
+import type { GeoPosition, SelectedPosition, SceneSnapshot, TerrainStatus } from './types';
+import type { PlaceResult } from '../locations/types';
 
 /** Owns the Viewer and all Cesium resources. React only receives serializable data. */
 export class SceneController {
@@ -186,7 +187,7 @@ export class SceneController {
     };
   }
 
-  select(position: GeoPosition) {
+  select(position: SelectedPosition) {
     this.selectionRevision++;
     const heightReference =
       this.snapshot.terrainStatus === 'ready'
@@ -204,7 +205,7 @@ export class SceneController {
         heightReference,
       },
       label: {
-        text: `${position.longitude.toFixed(3)}°, ${position.latitude.toFixed(3)}°`,
+        text: position.place?.name ?? `${position.longitude.toFixed(3)}°, ${position.latitude.toFixed(3)}°`,
         font: '12px sans-serif',
         fillColor: Color.WHITE,
         outlineColor: Color.fromCssColorString('#081320'),
@@ -226,9 +227,9 @@ export class SceneController {
     this.viewer.scene.requestRender();
   }
 
-  locate(longitude: number, latitude: number, cameraAltitude: number) {
+  locate(longitude: number, latitude: number, cameraAltitude: number, place?: PlaceResult) {
     const useTerrain = this.snapshot.terrainStatus === 'ready';
-    this.select({ longitude, latitude, height: useTerrain ? null : 0 });
+    this.select({ longitude, latitude, height: useTerrain ? null : 0, place });
     if (useTerrain) void this.sampleSelectedHeight(longitude, latitude);
     this.viewer.camera.flyTo({
       destination: Cartesian3.fromDegrees(longitude, latitude, cameraAltitude),
@@ -250,7 +251,9 @@ export class SceneController {
         requestId !== this.terrainRequestId
       )
         return;
-      if (Number.isFinite(point.height)) this.select({ longitude, latitude, height: point.height });
+      if (Number.isFinite(point.height) && this.snapshot.selection) {
+        this.select({ ...this.snapshot.selection, height: point.height });
+      }
     } catch {
       // Keep an unknown height unknown; do not manufacture a zero elevation.
     }

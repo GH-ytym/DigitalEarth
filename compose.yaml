@@ -1,0 +1,92 @@
+name: digitalearth-geonames
+
+services:
+  db:
+    image: postgis/postgis:17-3.6-alpine@sha256:cd2ae468934722d6f61691198ab29d4d2fd94f3a8684bc3ee6f79459e374c1b0
+    environment:
+      POSTGRES_DB: digitalearth
+      POSTGRES_USER: digitalearth
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+    secrets: [db_password]
+    ports:
+      - "127.0.0.1:${DIGITALEARTH_DB_PORT:-55432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U digitalearth -d digitalearth"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    image: digitalearth-geonames-gazetteer
+    build:
+      context: ./backend
+    command: [serve]
+    environment:
+      PGHOST: db
+      PGPORT: "5432"
+      PGDATABASE: digitalearth
+      PGUSER: digitalearth_reader
+      PGPASSWORD_FILE: /run/secrets/api_password
+      PGSSLMODE: disable
+    secrets: [api_password]
+    ports:
+      - "127.0.0.1:${DIGITALEARTH_API_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, /gazetteer, healthcheck]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+
+  gazetteer:
+    image: digitalearth-geonames-gazetteer
+    profiles: [operations]
+    build:
+      context: ./backend
+    environment:
+      PGHOST: db
+      PGPORT: "5432"
+      PGDATABASE: digitalearth
+      PGUSER: digitalearth
+      PGPASSWORD_FILE: /run/secrets/db_password
+      PGSSLMODE: disable
+      API_PASSWORD_FILE: /run/secrets/api_password
+    secrets: [db_password, api_password]
+    volumes:
+      - type: bind
+        source: ${GEONAMES_DATA_DIR:-../data/geonames/20261021}
+        target: /data
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GEONAMES_REPORT_DIR:-../work/geonames}
+        target: /reports
+        bind:
+          create_host_path: false
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+volumes:
+  postgres-data:
+
+secrets:
+  db_password:
+    file: ./infra/db-password.local
+  api_password:
+    file: ./infra/api-password.local

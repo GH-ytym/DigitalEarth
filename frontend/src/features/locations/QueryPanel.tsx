@@ -1,14 +1,18 @@
 import { useState } from 'react';
-import { Icon } from '../../components/Icon';
 import { CoordinatePanel } from './CoordinatePanel';
+import { PlaceSearchPanel } from './PlaceSearchPanel';
+import type { PlaceResult } from './types';
 
 interface Props {
   onLocate: (longitude: number, latitude: number, altitude: number) => void;
   disabled: boolean;
+  active: boolean;
+  selectedPlaceId?: number;
+  onSelectPlace: (place: PlaceResult) => void;
 }
 
-export function QueryPanel({ onLocate, disabled }: Props) {
-  const [tab, setTab] = useState<'places' | 'coordinates'>('coordinates');
+export function QueryPanel({ onLocate, disabled, active, selectedPlaceId, onSelectPlace }: Props) {
+  const [tab, setTab] = useState<'places' | 'coordinates'>('places');
 
   return (
     <>
@@ -38,15 +42,7 @@ export function QueryPanel({ onLocate, disabled }: Props) {
         aria-labelledby="places-tab"
         hidden={tab !== 'places'}
       >
-        <div className="query-empty">
-          <Icon name="locate" size={30} />
-          <h3>地名查询尚未接入</h3>
-          <p>接入地名服务后，可按名称检索地点并在地球中定位。</p>
-          <button className="primary-button" onClick={() => setTab('coordinates')}>
-            使用坐标定位
-            <Icon name="arrow" size={16} />
-          </button>
-        </div>
+        <PlaceSearchPanel active={active && tab === 'places'} disabled={disabled} selectedPlaceId={selectedPlaceId} onSelect={onSelectPlace} />
       </section>
       <section
         id="coordinates-panel"
