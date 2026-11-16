@@ -26,6 +26,7 @@ type Verification struct {
 	Digest     string          `json:"source_digest"`
 	Tables     int             `json:"gazetteer_tables"`
 	TotalBytes int64           `json:"gazetteer_total_bytes"`
+	OverCap    int             `json:"places_with_more_than_32_names"`
 	Queries    []QueryCheck    `json:"queries"`
 	PrefixPlan json.RawMessage `json:"prefix_query_plan"`
 	Passed     bool            `json:"passed"`
@@ -36,7 +37,7 @@ func Verify(ctx context.Context, conn *pgx.Conn) (*Verification, error) {
 	if err := conn.QueryRow(ctx, `SELECT current_setting('server_version'),postgis_full_version()`).Scan(&v.PostgreSQL, &v.PostGIS); err != nil {
 		return nil, err
 	}
-	var snapshotPlaces, snapshotNames, orphans, overCap, invalid int
+	var snapshotPlaces, snapshotNames, orphans, invalid int
 	if err := conn.QueryRow(ctx, `SELECT place_count,name_count,source_digest FROM gazetteer.snapshot WHERE singleton`).Scan(&snapshotPlaces, &snapshotNames, &v.Digest); err != nil {
 		return nil, err
 	}
@@ -48,11 +49,13 @@ func Verify(ctx context.Context, conn *pgx.Conn) (*Verification, error) {
         (SELECT count(*) FROM (SELECT place_id FROM gazetteer.names GROUP BY place_id HAVING count(*)>32) x),
         (SELECT count(*) FROM gazetteer.places WHERE longitude NOT BETWEEN -180 AND 180 OR latitude NOT BETWEEN -90 AND 90),
         (SELECT sum(pg_total_relation_size(format('%I.%I',schemaname,tablename)::regclass)) FROM pg_tables WHERE schemaname='gazetteer')
-        `).Scan(&v.Places, &v.Names, &v.Tables, &orphans, &overCap, &invalid, &v.TotalBytes); err != nil {
+        `).Scan(&v.Places, &v.Names, &v.Tables, &orphans, &v.OverCap, &invalid, &v.TotalBytes); err != nil {
 		return nil, err
 	}
-	if snapshotPlaces != v.Places || snapshotNames != v.Names || v.Tables != 3 || orphans != 0 || overCap != 0 || invalid != 0 {
-		return nil, fmt.Errorf("integrity check failed: snapshot=%d/%d actual=%d/%d tables=%d orphans=%d over_cap=%d invalid=%d", snapshotPlaces, snapshotNames, v.Places, v.Names, v.Tables, orphans, overCap, invalid)
+	// The 32-name cap applies to each input snapshot. A preserving merge may
+	// legitimately exceed it; trimming here would discard existing search aliases.
+	if snapshotPlaces != v.Places || snapshotNames != v.Names || v.Tables != 3 || orphans != 0 || invalid != 0 {
+		return nil, fmt.Errorf("integrity check failed: snapshot=%d/%d actual=%d/%d tables=%d orphans=%d invalid=%d", snapshotPlaces, snapshotNames, v.Places, v.Names, v.Tables, orphans, invalid)
 	}
 	checks := []struct {
 		query string

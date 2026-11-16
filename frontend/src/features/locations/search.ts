@@ -1,4 +1,4 @@
-import type { PlaceResult } from './types';
+import { placeKinds, type PlaceResult } from './types.ts';
 
 export function normalizedQuery(value: string): string {
   return value.normalize('NFKD').replace(/\p{Mn}/gu, '').toLowerCase()
@@ -13,7 +13,7 @@ function isPlace(value: unknown): value is PlaceResult {
     ['name', 'canonical_name', 'country_code', 'country_name', 'feature_code'].every(
       (key) => typeof place[key] === 'string' && (place[key] as string).length > 0,
     ) &&
-    ['country', 'admin1', 'city'].includes(place.kind as string) &&
+    placeKinds.some((kind) => kind === place.kind) &&
     (place.admin1_code === null || typeof place.admin1_code === 'string') &&
     (place.admin1_name === null || typeof place.admin1_name === 'string') &&
     typeof place.longitude === 'number' && Number.isFinite(place.longitude) &&

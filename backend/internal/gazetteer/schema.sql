@@ -1,7 +1,7 @@
 CREATE SCHEMA IF NOT EXISTS gazetteer;
 CREATE TABLE IF NOT EXISTS gazetteer.places (
     geoname_id bigint PRIMARY KEY CHECK (geoname_id > 0),
-    kind text NOT NULL CHECK (kind IN ('country', 'admin1', 'city')),
+    kind text NOT NULL CHECK (kind IN ('country', 'admin1', 'admin2', 'admin3', 'admin4', 'admin5', 'city')),
     canonical_name text NOT NULL CHECK (canonical_name <> ''),
     ascii_name text NOT NULL,
     country_code text NOT NULL,
@@ -13,7 +13,10 @@ CREATE TABLE IF NOT EXISTS gazetteer.places (
     latitude double precision NOT NULL CHECK (latitude BETWEEN -90 AND 90),
     population bigint NOT NULL CHECK (population >= 0),
     importance smallint NOT NULL,
-    source_modified_on date
+    source_modified_on date,
+    admin2_code text,
+    admin3_code text,
+    admin4_code text
 );
 CREATE TABLE IF NOT EXISTS gazetteer.names (
     place_id bigint NOT NULL REFERENCES gazetteer.places(geoname_id),
