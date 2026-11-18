@@ -1,0 +1,51 @@
+.main-panel.satellites-panel { width: 360px; }
+.satellite-source-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 13px; }
+.satellite-choice { display: flex; align-items: flex-start; gap: 11px; padding: 13px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+.satellite-choice input { margin-top: 5px; width: 16px; height: 16px; flex-shrink: 0; accent-color: #3678c3; }
+.satellite-choice strong { display: block; font-size: 13px; font-weight: 500; }
+.satellite-choice small { display: block; font-size: 12px; line-height: 1.7; margin-top: 4px; overflow-wrap: anywhere; }
+.satellite-position { font-family: Consolas, monospace; }
+.satellite-load { width: 100%; margin-top: 18px; }
+.satellite-message, .satellite-error { font-size: 12px; line-height: 1.8; margin: 13px 0; }
+.satellite-error { padding: 8px 10px; border-left: 2px solid #fff; background: var(--background); }
+.satellite-result-info { border-top: 1px solid var(--line); padding-top: 10px; font-size: 12px; line-height: 1.7; }
+.satellite-result-info p { margin: 5px 0; overflow-wrap: anywhere; }
+.satellite-actions { display: flex; justify-content: space-between; margin-top: 10px; }
+.satellite-provenance { font-size: 12px; line-height: 1.8; margin-top: 14px; }
+.satellite-provenance summary { cursor: pointer; }
+.satellite-provenance a { text-decoration: underline; text-underline-offset: 3px; }
+.satellite-provenance p { overflow-wrap: anywhere; }
+.satellite-history { display: grid; gap: 8px; }
+.satellite-history button { text-align: left; background: var(--background); border: 1px solid var(--line); padding: 10px; border-radius: 4px; }
+.satellite-history button:hover { background: var(--hover); }
+.satellite-history strong { font-size: 12px; line-height: 1.6; font-weight: 500; display: block; overflow-wrap: anywhere; }
+.satellite-history small { display: block; font: 11px/1.8 Consolas, monospace; margin-top: 5px; }
+.satellite-controls { position: absolute; left: calc(var(--nav-width) + 24px); right: 84px; bottom: 22px; padding: 13px 17px 8px; }
+.satellite-control-top { display: flex; align-items: center; gap: 15px; justify-content: space-between; flex-wrap: wrap; }
+.satellite-control-buttons { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+.satellite-control-buttons button, .satellite-control-buttons select { min-height: 33px; border: 1px solid #3d6495; border-radius: 4px; background: var(--background); color: #fff; padding: 5px 10px; font: inherit; font-size: 12px; }
+.satellite-control-buttons button:hover { background: var(--hover); }
+.satellite-control-buttons label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.satellite-control-buttons select { max-width: 190px; }
+.satellite-control-top time { font: 12px/1.8 Consolas, monospace; margin-left: auto; }
+.satellite-time-label { display: flex; justify-content: space-between; font-size: 12px; margin-top: 10px; }
+.satellite-controls input[type=range] { width: 100%; height: 26px; accent-color: #7bc4ff; margin: 0; }
+.has-satellite-track .main-panel { max-height: calc(100% - 270px); }
+.has-satellite-track .cesium-viewer-bottom { bottom: 155px !important; }
+.has-satellite-track .inspector { bottom: 180px; max-height: calc(100% - 280px); overflow-y: auto; }
+@media (max-width: 1100px) {
+  .main-panel.satellites-panel { width: 320px; }
+  .satellite-controls { left: calc(var(--nav-width) + 16px); right: 72px; }
+  .satellite-control-top time { margin-left: 0; }
+  .has-satellite-track .main-panel { max-height: calc(100% - 300px); }
+}
+@media (max-width: 760px) {
+  .main-panel.satellites-panel { width: min(330px, calc(100vw - var(--nav-width) - 32px)); }
+  .satellite-controls { left: calc(var(--nav-width) + 12px); right: 12px; bottom: 12px; padding: 10px; }
+  .satellite-control-buttons { gap: 6px; }
+  .satellite-control-buttons label { flex-wrap: wrap; }
+  .satellite-control-buttons select { max-width: 140px; }
+  .satellite-control-top { gap: 6px; }
+  .has-satellite-track .main-panel { max-height: calc(100% - 340px); }
+  .has-satellite-track .cesium-viewer-bottom { bottom: 190px !important; }
+}

@@ -54,6 +54,7 @@ npm run preview
 
 - 图层管理：Cesium ion 全球卫星影像、真实地形状态、中国省级行政区界线 WMS 叠加及网格辅助线。
 - 查询索引：真实 GeoNames 地名搜索、归属层级候选、键盘选择、地图定位，以及独立的坐标定位页签。
+- 卫星轨迹：后端读取 CelesTrak 公开 GP 要素，通过 C++ SGP4 DLL 生成国际空间站、哈勃和 NOAA-20 的轨迹，支持统一时钟回放、结果保存和复用。
 - 地球浏览：缩放、旋转、倾斜、指北、初始视角、全球视角与二维/三维切换。
 - 地表坐标拾取、选中属性与相机高度显示。
 - 深蓝色工作台、白色文字和图标，以及蓝色背景的选中状态。
@@ -111,6 +112,22 @@ docker compose run --rm gazetteer verify --report /reports/verification.json
 默认读取仓库外 `../data/geonames/20261021` 已有四个文件，原件只读挂载。配置、导入规则、数据边界及维护方式见 [本地地名数据库说明](docs/geonames-local-search.md)，实际验证结果见 [GeoNames 验证记录](docs/geonames-validation.md)。
 
 已初始化并导入后，日常只需 `docker compose up -d --wait db api`，再启动前端开发服务。进入“查询索引 → 地名查询”输入地名；候选第二行显示标准名称、一级行政区和国家，点击后定位。输入至少两个有效字符，支持精确与前缀匹配。前端开发和生产预览均通过相对路径 `/api` 转发到本机 API。
+
+## 公开卫星轨迹
+
+卫星模块已接入主项目左侧“卫星轨迹”，与图层、查询功能共用同一个 Cesium Viewer。前端只选择卫星和控制回放，不录入轨道参数。使用 CelesTrak 公开 GP 要素，由后端 SGP4 推算位置；不是实时遥测。
+
+启动 Docker Desktop 后，在仓库根目录打开一个 PowerShell 终端：
+
+```powershell
+.\infra\Start-Satellites.ps1
+```
+
+另一个终端按前面的方式在 `frontend` 运行 `npm.cmd run dev`，访问 `http://127.0.0.1:5173/`，进入“卫星轨迹”加载。卫星 API 为 `127.0.0.1:8093`，Vite 开发/预览将 `/api/v1/satellites` 单独代理至该服务，其他 `/api` 继续访问 Go 地名服务。既有 GeoNames 和省界服务按原方式启动。
+
+完整时序数据保存在 MinIO，PostgreSQL 保存要素快照、任务与成果索引。相同要素版本、时段和算法复用结果；倍速、暂停和拖动时间轴只在浏览器运行。数据来源、要素历元和获取时间均可在面板查看。初始化可复用原本机持久卷和凭据，不会删除原有数据。
+
+环境、来源、时效、坐标近似和源码入口见 [卫星轨迹接入说明](docs/satellites.md)。
 
 ## 技术说明
 

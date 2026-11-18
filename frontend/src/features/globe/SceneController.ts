@@ -24,6 +24,8 @@ import {
 } from 'cesium';
 import { sceneConfig } from '../../config/scene';
 import { provinceBoundary } from '../../config/mapServices';
+import { SatellitePlayback } from '../satellites/SatellitePlayback';
+import type { SatelliteManifest, SatelliteSamples } from '../satellites/types';
 import { initialSnapshot } from './types';
 import type { GeoPosition, SelectedPosition, SceneSnapshot, TerrainStatus } from './types';
 import type { PlaceResult } from '../locations/types';
@@ -36,6 +38,7 @@ import type { ProvinceSettings } from '../layers/provinceSettings';
 /** Owns the Viewer and all Cesium resources. React only receives serializable data. */
 export class SceneController {
   private readonly viewer: Viewer;
+  private readonly satellitePlayback: SatellitePlayback;
   private readonly input: ScreenSpaceEventHandler;
   private readonly disposers: Array<() => void> = [];
   private gridLayer?: ImageryLayer;
@@ -78,6 +81,7 @@ export class SceneController {
       maximumRenderTimeChange: Number.POSITIVE_INFINITY,
       shouldAnimate: false,
     });
+    this.satellitePlayback = new SatellitePlayback(this.viewer, satellitePlayback => this.emit({ satellitePlayback }));
     const scene = this.viewer.scene;
     scene.backgroundColor = Color.fromCssColorString('#06162e');
     if (scene.skyBox) scene.skyBox.show = false;
@@ -245,6 +249,7 @@ export class SceneController {
   }
 
   locate(longitude: number, latitude: number, cameraAltitude: number, place?: PlaceResult) {
+    this.satellitePlayback.follow(null);
     const useTerrain = this.snapshot.terrainStatus === 'ready';
     this.select({ longitude, latitude, height: useTerrain ? null : 0, place });
     if (useTerrain) void this.sampleSelectedHeight(longitude, latitude);
@@ -288,6 +293,7 @@ export class SceneController {
     view: { longitude: number; latitude: number; altitude: number },
     animate: boolean,
   ) {
+    this.satellitePlayback.follow(null);
     const options = {
       destination: Cartesian3.fromDegrees(view.longitude, view.latitude, view.altitude),
       orientation: { heading: 0, pitch: -CesiumMath.PI_OVER_TWO, roll: 0 },
@@ -424,6 +430,7 @@ export class SceneController {
   }
 
   focusProvinces() {
+    this.satellitePlayback.follow(null);
     const { west, south, east, north } = provinceBoundary.bounds;
     this.viewer.camera.flyTo({
       destination: Rectangle.fromDegrees(west - 2, south - 2, east + 2, north + 2),
@@ -485,6 +492,14 @@ export class SceneController {
     this.viewer.scene.requestRender();
   }
 
+  loadSatellites(manifest: SatelliteManifest, samples: SatelliteSamples) { this.satellitePlayback.load(manifest, samples); }
+  playSatellites(enabled: boolean) { this.satellitePlayback.play(enabled); }
+  seekSatellites(seconds: number) { this.satellitePlayback.seek(seconds); }
+  speedSatellites(speed: number) { this.satellitePlayback.speed(speed); }
+  followSatellite(id: string | null) { this.satellitePlayback.follow(id); }
+  focusSatellites() { this.satellitePlayback.focus(); }
+  clearSatellites() { this.satellitePlayback.clear(); }
+
   destroy() {
     if (this.disposed) return;
     this.disposed = true;
@@ -494,6 +509,7 @@ export class SceneController {
     ++this.terrainRequestId;
     this.removeTerrainErrorListener?.();
     this.disposers.forEach((dispose) => dispose());
+    this.satellitePlayback.destroy();
     this.input.destroy();
     this.viewer.destroy();
   }

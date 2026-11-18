@@ -1,6 +1,7 @@
 import type { PlaceResult } from '../locations/types';
 import { defaultProvinceSettings } from '../layers/provinceSettings';
 import type { ProvinceSettings } from '../layers/provinceSettings';
+import type { SatellitePlaybackState } from '../satellites/types';
 
 export type SceneModeName = '3D' | '2D';
 export type TerrainStatus = 'unconfigured' | 'disabled' | 'loading' | 'ready' | 'error';
@@ -14,6 +15,7 @@ export interface SelectedPosition extends GeoPosition {
   place?: PlaceResult;
 }
 export interface SceneSnapshot {
+  satellitePlayback: SatellitePlaybackState | null;
   status: 'loading' | 'ready' | 'error';
   error?: string;
   cameraHeight: number;
@@ -30,6 +32,7 @@ export interface SceneSnapshot {
   provinceSettingsSaved?: boolean;
 }
 export const initialSnapshot: SceneSnapshot = {
+  satellitePlayback: null,
   status: 'loading',
   cameraHeight: 25_000_000,
   heading: 0,

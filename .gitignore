@@ -1,5 +1,9 @@
 # Dependencies and build outputs
 node_modules/
+.venv/
+__pycache__/
+*.pyc
+/services/satellites/build/
 dist/
 *.tsbuildinfo
 coverage/

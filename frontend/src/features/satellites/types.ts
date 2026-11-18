@@ -1,0 +1,67 @@
+export interface SatelliteEntry {
+  norad_id: number;
+  display_name: string;
+  object_name: string;
+  epoch_utc: string;
+  fetched_at: string;
+  source_url: string;
+  age_hours: number;
+}
+export interface SatelliteCatalog {
+  provider: string;
+  update_error: string | null;
+  next_update_at: string | null;
+  satellites: SatelliteEntry[];
+}
+export interface TrackSatellite {
+  satellite_id: string;
+  norad_id: number;
+  display_name: string;
+  object_name: string;
+  sample_count: number;
+  period_s: number;
+  element_epoch_utc: string;
+  fetched_at: string;
+  source_url: string;
+}
+export interface SatelliteManifest {
+  schema_version: 'satellites-1';
+  result_id: string;
+  epoch_utc: string;
+  stop_utc: string;
+  duration_s: number;
+  output_step_s: number;
+  position_frame: 'ECEF_APPROX';
+  position_unit: 'm';
+  satellites: TrackSatellite[];
+  window_kind: 'historical' | 'current-window';
+  samples_url: string;
+}
+export interface SatelliteSamples {
+  schema_version: 'satellite-samples-1';
+  result_id: string;
+  satellites: Array<{ satellite_id: string; samples: number[][] }>;
+}
+export interface SatelliteJob {
+  job_id: string;
+  result_id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  error: string | null;
+  result_url: string;
+  cache_hit?: boolean;
+}
+export interface SavedTrack {
+  result_id: string;
+  status: string;
+  manifest: SatelliteManifest | null;
+  created_at: string;
+}
+export interface SatellitePlaybackState {
+  manifest: SatelliteManifest;
+  elapsed: number;
+  currentUtc: string;
+  playing: boolean;
+  speed: number;
+  following: string | null;
+  positions: Array<{ satellite_id: string; longitude: number; latitude: number; height: number }>;
+}

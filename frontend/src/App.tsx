@@ -10,13 +10,17 @@ import { initialSnapshot } from './features/globe/types';
 import type { MapLayerStatus, SceneSnapshot, TerrainStatus } from './features/globe/types';
 import { QueryPanel } from './features/locations/QueryPanel';
 import { placeCameraHeight, placeHierarchy, placeKindLabel } from './features/locations/types';
+import { SatellitePanel } from './features/satellites/SatellitePanel';
+import { SatelliteControls } from './features/satellites/SatelliteControls';
+import './features/satellites/satellites.css';
 
-type Panel = 'layers' | 'query';
+type Panel = 'layers' | 'query' | 'satellites';
 const navigation: Array<{ id: Panel; label: string; icon: IconName }> = [
   { id: 'layers', label: '图层管理', icon: 'layers' },
   { id: 'query', label: '查询索引', icon: 'locate' },
+  { id: 'satellites', label: '卫星轨迹', icon: 'orbit' },
 ];
-const panelTitles = { layers: '图层管理', query: '查询索引' };
+const panelTitles = { layers: '图层管理', query: '查询索引', satellites: '卫星轨迹' };
 const terrainLabels: Record<TerrainStatus, string> = {
   unconfigured: '未配置',
   disabled: '已关闭',
@@ -46,7 +50,7 @@ function surfaceHeight(height: number | null) {
 export default function App() {
   const controller = useRef<SceneController | null>(null);
   const [scene, setScene] = useState<SceneSnapshot>(initialSnapshot);
-  const [panel, setPanel] = useState<Panel | null>('query');
+  const [panel, setPanel] = useState<Panel | null>(() => new URLSearchParams(window.location.search).get('panel') === 'satellites' ? 'satellites' : 'query');
   const [grid, setGrid] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [layerPropertiesOpen, setLayerPropertiesOpen] = useState(false);
@@ -93,7 +97,7 @@ export default function App() {
         <span className="version">V0.1</span>
       </header>
 
-      <main className="workspace">
+      <main className={`workspace ${scene.satellitePlayback ? 'has-satellite-track' : ''}`}>
         <GlobeViewport onReady={onReady} onSnapshot={onSnapshot} onError={onError} />
         <nav className="navigation" aria-label="工作区功能">
           {navigation.map((item) => (
@@ -114,14 +118,14 @@ export default function App() {
           <span className="eyebrow">DIGITAL EARTH WORKSPACE</span>
           <h1>
             三维场景<span>/</span>
-            <small>基础地球</small>
+            <small>{scene.satellitePlayback ? '卫星轨迹' : '基础地球'}</small>
           </h1>
         </div>
 
-        <aside className={`floating-panel main-panel ${panel === 'query' ? 'query-panel' : ''}`} hidden={!panel} aria-label={panelTitles[panel ?? 'layers']}>
+        <aside className={`floating-panel main-panel ${panel === 'query' ? 'query-panel' : ''} ${panel === 'satellites' ? 'satellites-panel' : ''}`} hidden={!panel} aria-label={panelTitles[panel ?? 'layers']}>
           <div className="panel-header">
             <div>
-              <Icon name={panel === 'layers' ? 'layers' : 'locate'} size={18} />
+              <Icon name={panel === 'layers' ? 'layers' : panel === 'satellites' ? 'orbit' : 'locate'} size={18} />
               <h2>{panelTitles[panel ?? 'layers']}</h2>
             </div>
             <button className="icon-button" aria-label="收起面板" onClick={() => setPanel(null)}>
@@ -129,6 +133,13 @@ export default function App() {
             </button>
           </div>
           <div className="panel-content">
+            <div hidden={panel !== 'satellites'}>
+              <SatellitePanel active={panel === 'satellites'} ready={!!controller.current && !scene.transitioning}
+                playback={scene.satellitePlayback}
+                onLoad={(manifest, samples) => controller.current?.loadSatellites(manifest, samples)}
+                onFocus={() => controller.current?.focusSatellites()}
+                onClear={() => controller.current?.clearSatellites()} />
+            </div>
             {panel === 'layers' && (
               <>
                 <p className="panel-description">管理地球底图、地形与辅助图层。</p>
@@ -289,7 +300,7 @@ export default function App() {
           />
         )}
 
-        {inspectorOpen && !layerPropertiesOpen && (
+        {inspectorOpen && !layerPropertiesOpen && panel !== 'satellites' && (
           <aside className="floating-panel inspector" aria-label="场景信息">
             <div className="panel-header">
               <div>
@@ -458,7 +469,14 @@ export default function App() {
           </div>
         </div>
 
-        <div className="mouse-hint">
+        {scene.satellitePlayback && <SatelliteControls state={scene.satellitePlayback}
+          onPlay={enabled => controller.current?.playSatellites(enabled)}
+          onSeek={elapsed => controller.current?.seekSatellites(elapsed)}
+          onSpeed={speed => controller.current?.speedSatellites(speed)}
+          onFollow={id => controller.current?.followSatellite(id)}
+          onClose={() => controller.current?.clearSatellites()} />}
+
+        <div className="mouse-hint" hidden={!!scene.satellitePlayback}>
           <Icon name="mouse" size={14} />
           <span>
             拖动浏览<span className="hint-dot">·</span>滚轮缩放<span className="hint-dot">·</span>

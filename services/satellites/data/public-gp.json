@@ -1,0 +1,19 @@
+{
+  "provider": "CelesTrak",
+  "fetched_at": "2026-11-18T02:26:08.843517+00:00",
+  "format": "CSV (OMM fields)",
+  "sources": [
+    {
+      "norad_id": 25544,
+      "url": "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=CSV"
+    },
+    {
+      "norad_id": 20580,
+      "url": "https://celestrak.org/NORAD/elements/gp.php?CATNR=20580&FORMAT=CSV"
+    },
+    {
+      "norad_id": 43013,
+      "url": "https://celestrak.org/NORAD/elements/gp.php?CATNR=43013&FORMAT=CSV"
+    }
+  ]
+}

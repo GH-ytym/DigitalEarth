@@ -14,6 +14,7 @@ const apiProxy = {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), 'DIGITALEARTH_');
   const serviceProxy = {
+    '/api/v1/satellites': { target: env.DIGITALEARTH_SATELLITES_TARGET || 'http://127.0.0.1:8093' },
     ...apiProxy,
     '/geoserver': {
       target: env.DIGITALEARTH_GEOSERVER_TARGET || 'http://127.0.0.1:8081',
