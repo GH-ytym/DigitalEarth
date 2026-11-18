@@ -18,6 +18,27 @@ def executable():
                     return str(path)
     return None
 
+
+def tracking_snapshot(page):
+    return page.evaluate("""() => {
+      const v = window.__testViewer;
+      const p = v.trackedEntity.position.getValue(v.clock.currentTime);
+      const c = v.camera.positionWC;
+      const screen = v.scene.cartesianToCanvasCoordinates(p);
+      return {id:v.trackedEntity.id, distance:Math.hypot(c.x-p.x,c.y-p.y,c.z-p.z),
+        height:v.camera.positionCartographic.height, pitch:v.camera.pitch,
+        centreError:Math.hypot(screen.x-v.scene.canvas.clientWidth/2,screen.y-v.scene.canvas.clientHeight/2),
+        camera:[c.x,c.y,c.z]};
+    }""")
+
+
+def assert_overview(state, satellite_id, distance=16000000):
+    assert state["id"] == satellite_id, state
+    assert abs(state["distance"] - distance) < 100, state
+    assert state["height"] > 15000000, state
+    assert state["pitch"] < -1.5, state
+    assert state["centreError"] < 2, state
+
 with sync_playwright() as playwright:
     browser = playwright.chromium.launch(executable_path=executable(), headless=True,
                                          args=["--enable-unsafe-swiftshader"])
@@ -110,16 +131,40 @@ with sync_playwright() as playwright:
     assert len(requests) == count, "Playback controls must not issue backend requests."
     page.get_by_label("跟随卫星", exact=True).select_option("norad-25544")
     page.wait_for_timeout(1800)
-    tracking = page.evaluate("""() => {
-      const v = window.__testViewer;
-      const p = v.trackedEntity.position.getValue(v.clock.currentTime);
-      const c = v.camera.positionWC;
-      return {distance:Math.hypot(c.x-p.x,c.y-p.y,c.z-p.z),height:v.camera.positionCartographic.height};
-    }""")
-    assert 2300000 < tracking["distance"] < 2600000, tracking
-    assert tracking["height"] > 1000000, tracking
+    assert_overview(tracking_snapshot(page), "norad-25544")
+    # Seeking and switching satellites keep the target centred in a high, downward view.
+    slider.click(position={"x":bounds["width"]*.6,"y":bounds["height"]/2})
+    page.wait_for_timeout(200)
+    assert_overview(tracking_snapshot(page), "norad-25544")
+    page.get_by_label("跟随卫星", exact=True).select_option("norad-43013")
+    page.wait_for_timeout(1800)
+    assert_overview(tracking_snapshot(page), "norad-43013")
     page.screenshot(path=str(OUT / "satellite-follow.png"))
+    before_follow_play = tracking_snapshot(page)
+    controls.get_by_role("button", name="播放", exact=True).click()
+    page.wait_for_timeout(700)
+    controls.get_by_role("button", name="暂停", exact=True).click()
+    after_follow_play = tracking_snapshot(page)
+    assert_overview(after_follow_play, "norad-43013")
+    assert sum((a-b)**2 for a,b in zip(before_follow_play["camera"],after_follow_play["camera"])) > 100000000
+    # User zoom is retained while the view centre continues to follow playback time.
+    page.get_by_role("button", name="缩小", exact=True).click()
+    page.wait_for_timeout(200)
+    zoomed = tracking_snapshot(page)
+    assert zoomed["distance"] > 17000000, zoomed
+    slider.click(position={"x":bounds["width"]*.4,"y":bounds["height"]/2})
+    page.wait_for_timeout(200)
+    assert_overview(tracking_snapshot(page), "norad-43013", zoomed["distance"])
+    before_free = tracking_snapshot(page)["camera"]
     page.get_by_label("跟随卫星", exact=True).select_option("")
+    after_free = page.evaluate("""() => {
+      const v = window.__testViewer;
+      if (v.trackedEntity) throw Error('Free view still tracks an entity');
+      const c = v.camera.positionWC;
+      return [c.x,c.y,c.z];
+    }""")
+    assert sum((a-b)**2 for a,b in zip(before_free,after_free)) < 1
+    assert len(requests) == count, "Following, seeking and zoom must stay local."
     page.locator(".navigation").get_by_role("button",name="查询索引",exact=True).click()
     expect(page.get_by_role("tab",name="地名查询",exact=True)).to_be_visible()
     assert page.evaluate("document.querySelector('.cesium-widget canvas') === window.__initialGlobeCanvas")
@@ -163,5 +208,5 @@ with sync_playwright() as playwright:
     expect(toggle).to_be_disabled()
     expect(page.locator(".cesium-widget canvas")).to_have_count(1)
     (OUT / "browser-result.json").write_text(json.dumps({"page_errors":errors,"satellite_api_requests":len(requests)},indent=2),encoding="utf-8")
-    print("Integrated workspace passed: timeline folding, live subpoints without trails, distant tracking, cache reuse and existing panels.")
+    print("Integrated workspace passed: Earth overview tracking, centred target during playback/seek, retained zoom, timeline and cache reuse.")
     browser.close()

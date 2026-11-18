@@ -1,7 +1,7 @@
 import {
   ArcType, Cartesian2, Cartesian3, Cartographic, ClockRange, ClockStep, Color, CustomDataSource,
   HeightReference, JulianDate, LabelStyle, LinearApproximation, Math as CesiumMath, ReferenceFrame,
-  SampledPositionProperty, TimeInterval, TimeIntervalCollection, VelocityOrientationProperty,
+  SampledPositionProperty, TimeInterval, TimeIntervalCollection, TrackingReferenceFrame, VelocityOrientationProperty,
 } from 'cesium';
 import type { Entity, Viewer } from 'cesium';
 import type { SatelliteManifest, SatellitePlaybackState, SatelliteSamples } from './types';
@@ -46,8 +46,9 @@ export class SatellitePlayback {
       } });
       this.entities.push(this.source.entities.add({ id: track.satellite_id, position,
         availability,
-        // A metre-based offset in the tracking frame, independent of the model's size.
-        viewFrom: new Cartesian3(-1500000, -1500000, 1200000),
+        // Keep a north-up Earth overview; only the view centre follows the satellite.
+        trackingReferenceFrame: TrackingReferenceFrame.ENU,
+        viewFrom: new Cartesian3(0, 0, 16_000_000),
         orientation: new VelocityOrientationProperty(position),
         model: { uri: './models/satellite.glb', minimumPixelSize: 30, maximumScale: 80000 },
         point: { pixelSize: 6, color },
@@ -123,8 +124,10 @@ export class SatellitePlayback {
     this.tick(true);
   }
   follow(id: string | null) {
-    this.following = id;
-    this.viewer.trackedEntity = this.entities.find(entity => entity.id === id);
+    const entity = this.entities.find(entity => entity.id === id);
+    if (entity) this.viewer.camera.cancelFlight();
+    this.following = entity?.id ?? null;
+    this.viewer.trackedEntity = entity;
     this.viewer.scene.requestRender();
     this.tick(true);
   }
