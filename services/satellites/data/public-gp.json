@@ -1,19 +1,47 @@
 {
   "provider": "CelesTrak",
-  "fetched_at": "2026-11-18T02:26:08.843517+00:00",
+  "fetched_at": "2026-11-18T12:31:15.431225+00:00",
   "format": "CSV (OMM fields)",
   "sources": [
     {
       "norad_id": 25544,
-      "url": "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=CSV"
+      "url": "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=CSV"
+    },
+    {
+      "norad_id": 48274,
+      "url": "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=CSV"
     },
     {
       "norad_id": 20580,
-      "url": "https://celestrak.org/NORAD/elements/gp.php?CATNR=20580&FORMAT=CSV"
+      "url": "https://celestrak.org/NORAD/elements/gp.php?GROUP=science&FORMAT=CSV"
     },
     {
-      "norad_id": 43013,
-      "url": "https://celestrak.org/NORAD/elements/gp.php?CATNR=43013&FORMAT=CSV"
+      "norad_id": 25994,
+      "url": "https://celestrak.org/NORAD/elements/gp.php?GROUP=resource&FORMAT=CSV"
+    },
+    {
+      "norad_id": 49260,
+      "url": "https://celestrak.org/NORAD/elements/gp.php?GROUP=resource&FORMAT=CSV"
+    },
+    {
+      "norad_id": 54234,
+      "url": "https://celestrak.org/NORAD/elements/gp.php?GROUP=weather&FORMAT=CSV"
+    },
+    {
+      "norad_id": 36585,
+      "url": "https://celestrak.org/NORAD/elements/gp.php?GROUP=gnss&FORMAT=CSV"
+    },
+    {
+      "norad_id": 37846,
+      "url": "https://celestrak.org/NORAD/elements/gp.php?GROUP=gnss&FORMAT=CSV"
+    },
+    {
+      "norad_id": 43001,
+      "url": "https://celestrak.org/NORAD/elements/gp.php?GROUP=gnss&FORMAT=CSV"
+    },
+    {
+      "norad_id": 48808,
+      "url": "https://celestrak.org/NORAD/elements/gp.php?GROUP=geo&FORMAT=CSV"
     }
   ]
 }

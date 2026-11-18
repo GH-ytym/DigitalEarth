@@ -1,0 +1,93 @@
+{
+  "schema_version": "satellite-catalog-1",
+  "categories": {
+    "station": "空间站",
+    "science": "天文观测",
+    "earth_observation": "对地观测",
+    "weather_polar": "极轨气象",
+    "navigation": "导航",
+    "weather_geo": "静止气象"
+  },
+  "satellites": [
+    {
+      "norad_id": 25544,
+      "display_name": "国际空间站 ISS",
+      "category": "station",
+      "orbit_type": "LEO",
+      "source_group": "stations",
+      "enabled": true
+    },
+    {
+      "norad_id": 48274,
+      "display_name": "中国空间站（天和）",
+      "category": "station",
+      "orbit_type": "LEO",
+      "source_group": "stations",
+      "enabled": true
+    },
+    {
+      "norad_id": 20580,
+      "display_name": "哈勃空间望远镜 HST",
+      "category": "science",
+      "orbit_type": "LEO",
+      "source_group": "science",
+      "enabled": true
+    },
+    {
+      "norad_id": 25994,
+      "display_name": "Terra 对地观测卫星",
+      "category": "earth_observation",
+      "orbit_type": "LEO",
+      "source_group": "resource",
+      "enabled": true
+    },
+    {
+      "norad_id": 49260,
+      "display_name": "Landsat 9",
+      "category": "earth_observation",
+      "orbit_type": "LEO",
+      "source_group": "resource",
+      "enabled": true
+    },
+    {
+      "norad_id": 54234,
+      "display_name": "NOAA-21",
+      "category": "weather_polar",
+      "orbit_type": "LEO",
+      "source_group": "weather",
+      "enabled": true
+    },
+    {
+      "norad_id": 36585,
+      "display_name": "GPS IIF-1（PRN 25）",
+      "category": "navigation",
+      "orbit_type": "MEO",
+      "source_group": "gnss",
+      "enabled": true
+    },
+    {
+      "norad_id": 37846,
+      "display_name": "Galileo GSAT0101",
+      "category": "navigation",
+      "orbit_type": "MEO",
+      "source_group": "gnss",
+      "enabled": true
+    },
+    {
+      "norad_id": 43001,
+      "display_name": "北斗三号 M1（C19）",
+      "category": "navigation",
+      "orbit_type": "MEO",
+      "source_group": "gnss",
+      "enabled": true
+    },
+    {
+      "norad_id": 48808,
+      "display_name": "风云四号 B 星",
+      "category": "weather_geo",
+      "orbit_type": "GEO",
+      "source_group": "geo",
+      "enabled": true
+    }
+  ]
+}

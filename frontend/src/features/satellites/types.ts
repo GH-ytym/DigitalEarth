@@ -1,6 +1,9 @@
 export interface SatelliteEntry {
   norad_id: number;
   display_name: string;
+  category: string;
+  category_name: string;
+  orbit_type: 'LEO' | 'MEO' | 'GEO';
   object_name: string;
   epoch_utc: string;
   fetched_at: string;
@@ -9,6 +12,7 @@ export interface SatelliteEntry {
 }
 export interface SatelliteCatalog {
   provider: string;
+  max_selected: number;
   update_error: string | null;
   next_update_at: string | null;
   satellites: SatelliteEntry[];

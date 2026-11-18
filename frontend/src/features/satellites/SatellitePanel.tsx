@@ -16,13 +16,27 @@ interface Props {
 
 export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onClear }: Props) {
   const [catalog, setCatalog] = useState<SatelliteCatalog | null>(null);
-  const [selected, setSelected] = useState<number[]>([25544, 20580, 43013]);
+  const [selected, setSelected] = useState<number[]>([25544, 48274, 20580]);
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState('');
   const [history, setHistory] = useState<SavedTrack[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
   const operation = useRef<AbortController | null>(null);
   const catalogLoaded = useRef(false);
+  const limit = catalog?.max_selected ?? 3;
+  const categories = [...new Map(catalog?.satellites.map(sat => [sat.category, sat.category_name])).entries()];
+  const query = search.trim().toLocaleLowerCase();
+  const visible = catalog?.satellites.filter(sat => (!category || sat.category === category) &&
+    `${sat.display_name} ${sat.object_name} ${sat.norad_id}`.toLocaleLowerCase().includes(query)) ?? [];
+
+  function applyCatalog(value: SatelliteCatalog) {
+    catalogLoaded.current = true;
+    setCatalog(value);
+    setSelected(previous => previous.filter(id => value.satellites.some(sat => sat.norad_id === id)).slice(0, value.max_selected));
+    setError(value.update_error);
+  }
 
   useEffect(() => () => operation.current?.abort(), []);
   useEffect(() => {
@@ -31,7 +45,7 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
     operation.current = controller;
     setBusy(true);
     Promise.all([readCatalog(controller.signal), readHistory(controller.signal)])
-      .then(([value, rows]) => { if (!controller.signal.aborted) { catalogLoaded.current = true; setCatalog(value); setHistory(rows); setError(value.update_error); } })
+      .then(([value, rows]) => { if (!controller.signal.aborted) { applyCatalog(value); setHistory(rows); } })
       .catch(err => { if (!controller.signal.aborted) setError(err.message); })
       .finally(() => { if (!controller.signal.aborted) setBusy(false); });
     return () => controller.abort();
@@ -46,9 +60,7 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
     try {
       if (action === 'refresh') {
         const value = await readCatalog(controller.signal, true);
-        catalogLoaded.current = true;
-        setCatalog(value);
-        setError(value.update_error);
+        applyCatalog(value);
         setMessage('卫星数据已读取。');
       } else {
         setMessage(action === 'load' ? '正在加载轨迹…' : '正在读取已保存轨迹…');
@@ -57,7 +69,8 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
           : await loadSavedTrack(action, controller.signal);
         if (controller.signal.aborted) return;
         onLoad(data.manifest, data.samples);
-        setSelected(data.manifest.satellites.map(sat => sat.norad_id));
+        setSelected(data.manifest.satellites.map(sat => sat.norad_id)
+          .filter(id => catalog?.satellites.some(sat => sat.norad_id === id)).slice(0, limit));
         setMessage(action !== 'load' ? '已加载保存的轨迹。'
           : 'reused' in data && data.reused ? '已复用保存的轨迹成果。' : '轨迹已生成并保存。');
         setHistory(await readHistory(controller.signal));
@@ -71,20 +84,35 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
 
   return <div className="satellite-panel-content">
     <div className="satellite-source-heading"><strong>卫星列表</strong><button className="text-button" disabled={busy} onClick={() => void act('refresh')}>更新数据</button></div>
-    {catalog?.satellites.map(sat => {
+    <div className="satellite-filters">
+      <input type="search" aria-label="搜索卫星" placeholder="名称 / NORAD 编号" value={search} onChange={event => setSearch(event.target.value)} />
+      <select aria-label="卫星分类" value={category} onChange={event => setCategory(event.target.value)}>
+        <option value="">全部分类</option>{categories.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+      </select>
+    </div>
+    <div className="satellite-selection-status">
+      <span role="status">已选 {selected.length} / {limit}<span> · 共 {catalog?.satellites.length ?? 0} 颗</span></span>
+      <button className="text-button" aria-label="清空卫星选择" disabled={busy || !selected.length} onClick={() => setSelected([])}>清空</button>
+    </div>
+    <div className="satellite-list" role="group" aria-label="可选卫星列表" tabIndex={0}>
+    {visible.map(sat => {
       const position = playback?.positions.find(p => p.satellite_id === `norad-${sat.norad_id}`);
-      return <label className="satellite-choice" key={sat.norad_id}>
-        <input type="checkbox" checked={selected.includes(sat.norad_id)} disabled={busy}
-          onChange={event => setSelected(previous => event.target.checked ? [...previous, sat.norad_id] : previous.filter(id => id !== sat.norad_id))} />
-        <span><strong>{sat.display_name}</strong><small>{sat.object_name} · NORAD {sat.norad_id}</small>
-          <small>要素 {satelliteTime(sat.epoch_utc)}</small>
-          {sat.age_hours > 24 && <small>要素已超过 24 小时，请留意有效期。</small>}
+      const checked = selected.includes(sat.norad_id);
+      return <label className="satellite-choice" key={sat.norad_id} title={`${sat.object_name} · 要素 ${satelliteTime(sat.epoch_utc)}`}>
+        <input type="checkbox" checked={checked} disabled={busy || (!checked && selected.length >= limit)}
+          onChange={event => setSelected(previous => event.target.checked
+            ? previous.includes(sat.norad_id) || previous.length >= limit ? previous : [...previous, sat.norad_id]
+            : previous.filter(id => id !== sat.norad_id))} />
+        <span><strong>{sat.display_name}</strong>
+          <small>NORAD {sat.norad_id} · {sat.category_name} · {{ LEO: '低轨', MEO: '中轨', GEO: '静止轨道' }[sat.orbit_type]}</small>
           {position && <small className="satellite-position">{position.longitude.toFixed(2)}°，{position.latitude.toFixed(2)}° · {(position.height / 1000).toFixed(1)} km</small>}
         </span>
       </label>;
     })}
+    {catalog && !visible.length && <p className="satellite-message">没有匹配的卫星。</p>}
+    </div>
     {!catalog && !busy && <button className="text-button" onClick={() => void act('refresh')}>重新获取卫星目录</button>}
-    <button className="primary-button satellite-load" disabled={busy || !ready || !catalog || !selected.length}
+    <button className="primary-button satellite-load" disabled={busy || !ready || !catalog || !selected.length || selected.length > limit}
       onClick={() => void act('load')}>{busy ? '正在加载…' : '加载所选卫星轨迹'}</button>
     {message && <p className="satellite-message" role="status">{message}</p>}
     {error && <p className="satellite-error" role="alert">{error}</p>}
@@ -95,13 +123,13 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
       </div>
       <div className="satellite-actions"><button className="text-button" onClick={onFocus}>查看全部轨迹</button><button className="text-button" onClick={onClear}>卸载轨迹</button></div>
       <details className="satellite-provenance"><summary>数据获取时间与来源</summary>
-        {playback.manifest.satellites.map(sat => <p key={sat.satellite_id}><a href={sat.source_url} target="_blank" rel="noreferrer">{sat.object_name}</a><br />获取：{satelliteTime(sat.fetched_at)}</p>)}
+        {playback.manifest.satellites.map(sat => <p key={sat.satellite_id}><a href={sat.source_url} target="_blank" rel="noreferrer">{sat.object_name}</a><br />要素：{satelliteTime(sat.element_epoch_utc)}<br />获取：{satelliteTime(sat.fetched_at)}</p>)}
       </details>
     </>}
     <div className="panel-divider" />
     <h3 className="section-title">已保存轨迹</h3>
     {!history.length && <p className="satellite-message">加载成功后自动保存，刷新页面仍可读取。</p>}
-    <div className="satellite-history">{history.slice(0, 6).map(row => <button key={row.result_id} type="button" disabled={busy || !ready}
+    <div className="satellite-history" role="group" aria-label="已保存轨迹列表" tabIndex={0}>{history.map(row => <button key={row.result_id} type="button" disabled={busy || !ready}
       onClick={() => void act(row.result_id)}><strong>{row.manifest!.satellites.map(sat => sat.object_name).join(' / ')}</strong>
       <small>{satelliteTime(row.manifest!.epoch_utc)} · {row.result_id.slice(0, 8)}</small></button>)}</div>
   </div>;

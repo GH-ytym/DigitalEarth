@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from minio.error import S3Error
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from catalog import PublicCatalog, SATELLITES
+from catalog import MAX_SELECTED, PublicCatalog, SATELLITES
 from config import ROOT, Settings
 from dll_adapter import OrbitLibrary
 from service import BusyError, SatelliteService
@@ -14,7 +14,7 @@ from storage import Store
 
 class TrackRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    norad_ids: list[int] = Field(min_length=1, max_length=3)
+    norad_ids: list[int] = Field(min_length=1, max_length=MAX_SELECTED)
 
     @model_validator(mode="after")
     def supported(self):

@@ -94,8 +94,10 @@ export async function loadSelectedTrack(ids: number[], signal: AbortSignal) {
 }
 export async function readCatalog(signal: AbortSignal, refresh = false): Promise<SatelliteCatalog> {
   const catalog = await satelliteJSON<SatelliteCatalog>(`${satelliteApi}/${refresh ? 'refresh' : 'catalog'}`, signal, refresh ? {} : undefined);
-  if (!Array.isArray(catalog.satellites) || !catalog.satellites.length || !catalog.satellites.every(sat =>
-    Number.isSafeInteger(sat.norad_id) && typeof sat.display_name === 'string' && validDate(sat.epoch_utc))) {
+  if (!Number.isSafeInteger(catalog.max_selected) || catalog.max_selected < 1 || catalog.max_selected > 3 ||
+    !Array.isArray(catalog.satellites) || !catalog.satellites.length || !catalog.satellites.every(sat =>
+    Number.isSafeInteger(sat.norad_id) && typeof sat.display_name === 'string' && validDate(sat.epoch_utc) &&
+    typeof sat.category === 'string' && typeof sat.category_name === 'string' && ['LEO', 'MEO', 'GEO'].includes(sat.orbit_type))) {
     throw new Error('公开卫星目录格式异常。');
   }
   return catalog;

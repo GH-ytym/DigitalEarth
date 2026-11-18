@@ -2,17 +2,62 @@ import csv
 import ctypes as C
 from datetime import datetime, timezone
 import json
+from io import BytesIO, StringIO
 import math
 import time
 import unittest
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
+from urllib.error import URLError
 
 from sgp4 import omm
 from sgp4.api import Satrec
 from fastapi.testclient import TestClient
 
 from app import app
-from config import ROOT
+from catalog import CATALOG, SPECIFICATIONS, SATELLITES, fetch_public_records, seed_snapshot, validate_records
+from config import ROOT, Settings
 from dll_adapter import OrbitLibrary, julian, utc
+from storage import Store
+
+
+class CatalogTests(unittest.TestCase):
+    def setUp(self):
+        self.records = list(csv.DictReader((ROOT / "data/public-gp.csv").read_text(encoding="utf-8").splitlines()))
+
+    def test_group_download_filters_objects_and_requires_a_complete_catalog(self):
+        def response(request, **kwargs):
+            group = parse_qs(urlparse(request.full_url).query)["GROUP"][0]
+            rows = [row for row in self.records if SPECIFICATIONS[int(row["NORAD_CAT_ID"])]["source_group"] == group]
+            rows.append({**self.records[0], "NORAD_CAT_ID": "123456"})
+            text = StringIO()
+            writer = csv.DictWriter(text, fieldnames=list(self.records[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+            stream = BytesIO(text.getvalue().encode())
+            stream.status, stream.headers = 200, {}
+            return stream
+        with patch("catalog.urlopen", side_effect=response) as download:
+            rows = fetch_public_records()
+        self.assertEqual([int(row["NORAD_CAT_ID"]) for row in rows], list(SATELLITES))
+        self.assertEqual(download.call_count, len({entry["source_group"] for entry in CATALOG}))
+        with self.assertRaises(ValueError):
+            validate_records(rows[:-1])
+        with self.assertRaises(ValueError):
+            validate_records(rows[:-1] + [rows[0]])
+
+    def test_first_source_error_stops_the_batch(self):
+        with patch("catalog.urlopen", side_effect=URLError("offline")) as download:
+            with self.assertRaises(URLError):
+                fetch_public_records()
+        self.assertEqual(download.call_count, 1)
+
+    def test_disabled_entry_can_keep_its_offline_snapshot(self):
+        active = {norad: name for norad, name in SATELLITES.items() if norad != 48808}
+        with patch("catalog.SATELLITES", active):
+            _, rows = seed_snapshot()
+        self.assertEqual({int(row["NORAD_CAT_ID"]) for row in rows}, set(active))
+        self.assertIn(48808, {int(row["NORAD_CAT_ID"]) for row in self.records})
 
 
 class NativeTests(unittest.TestCase):
@@ -56,9 +101,19 @@ class NativeTests(unittest.TestCase):
 class PipelineTests(unittest.TestCase):
     def test_public_catalog_saved_tracks_and_restart_reuse(self):
         body = {"norad_ids": [25544, 20580]}
+        store = Store(Settings())
+        with store.connect() as conn:
+            exists = conn.execute("SELECT to_regclass('satellite_elements') AS table_name").fetchone()["table_name"]
+            before = conn.execute("SELECT * FROM satellite_elements").fetchall() if exists else []
         with TestClient(app) as client:
+            with store.connect() as conn:
+                after = {row["norad_id"]: row for row in conn.execute("SELECT * FROM satellite_elements").fetchall()}
+            for row in before:
+                self.assertEqual(after[row["norad_id"]], row, "Startup must preserve existing elements and legacy rows.")
             catalog = client.get("/api/v1/satellites/catalog").json()
-            self.assertEqual({sat["norad_id"] for sat in catalog["satellites"]}, {25544,20580,43013})
+            self.assertEqual({sat["norad_id"] for sat in catalog["satellites"]},
+                             {25544,48274,20580,25994,49260,54234,36585,37846,43001,48808})
+            self.assertEqual(catalog["max_selected"], 3)
             self.assertTrue(all(sat["source_url"].startswith("https://celestrak.org/") for sat in catalog["satellites"]))
             response = client.post("/api/v1/satellites/tracks", json=body)
             self.assertIn(response.status_code, (200,202))
@@ -83,6 +138,8 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(client.get("/api/v1/satellites/health").json()["native_calls"], count)
             self.assertEqual(client.post("/api/v1/satellites/tracks", json={**body,"altitude_km":550}).status_code, 422)
             self.assertEqual(client.post("/api/v1/satellites/tracks", json={"norad_ids":[123]}).status_code, 422)
+            for ids in ([25544,48274,20580,25994], [25544,25544], [43013]):
+                self.assertEqual(client.post("/api/v1/satellites/tracks", json={"norad_ids":ids}).status_code, 422)
             changed = client.app.state.service.prepare([25544,20580])
             key = client.app.state.service.cache_key(changed)
             changed["elements"][0]["fingerprint"] = "different-public-elements"
@@ -93,6 +150,27 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(repeated["result_id"], job["result_id"])
             self.assertEqual(client.get(manifest["samples_url"]).content, saved.content)
             self.assertEqual(client.get("/api/v1/satellites/health").json()["native_calls"], 0)
+
+    def test_navigation_and_geostationary_full_tracks(self):
+        with TestClient(app) as client:
+            for ids in ([36585,37846,43001], [48808,25994,49260]):
+                job = client.post("/api/v1/satellites/tracks", json={"norad_ids":ids}).json()
+                deadline = time.monotonic() + 20
+                while job["status"] in {"queued", "running"}:
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(.03)
+                    job = client.get(f"/api/v1/satellites/jobs/{job['job_id']}").json()
+                self.assertEqual(job["status"], "succeeded", job)
+                manifest = client.get(job["result_url"]).json()
+                data = client.get(manifest["samples_url"]).json()
+                self.assertEqual({sat["norad_id"] for sat in manifest["satellites"]}, set(ids))
+                self.assertTrue(all(len(track["samples"]) == 721 for track in data["satellites"]))
+                for track in data["satellites"]:
+                    radius = math.hypot(*track["samples"][0][1:])
+                    if track["satellite_id"] == "norad-48808":
+                        self.assertGreater(radius, 40000000)
+                    elif track["satellite_id"] in {"norad-36585", "norad-37846", "norad-43001"}:
+                        self.assertGreater(radius, 20000000)
 
 if __name__ == "__main__":
     unittest.main()
