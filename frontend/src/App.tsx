@@ -1,11 +1,13 @@
 import { useCallback, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
 import { sceneConfig } from './config/scene';
+import { provinceBoundary } from './config/mapServices';
+import { LayerPropertiesPanel } from './features/layers/LayerPropertiesPanel';
 import type { IconName } from './components/Icon';
 import { GlobeViewport } from './features/globe/GlobeViewport';
 import type { SceneController } from './features/globe/SceneController';
 import { initialSnapshot } from './features/globe/types';
-import type { SceneSnapshot, TerrainStatus } from './features/globe/types';
+import type { MapLayerStatus, SceneSnapshot, TerrainStatus } from './features/globe/types';
 import { QueryPanel } from './features/locations/QueryPanel';
 import { placeCameraHeight, placeHierarchy, placeKindLabel } from './features/locations/types';
 
@@ -20,6 +22,12 @@ const terrainLabels: Record<TerrainStatus, string> = {
   disabled: '已关闭',
   loading: '加载中',
   ready: '可用',
+  error: '加载失败',
+};
+const mapLayerLabels: Record<MapLayerStatus, string> = {
+  disabled: '已关闭',
+  loading: '加载中',
+  ready: '已开启',
   error: '加载失败',
 };
 
@@ -41,6 +49,8 @@ export default function App() {
   const [panel, setPanel] = useState<Panel | null>('query');
   const [grid, setGrid] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [layerPropertiesOpen, setLayerPropertiesOpen] = useState(false);
+  const layerPropertiesButton = useRef<HTMLButtonElement>(null);
   const onReady = useCallback((value: SceneController | null) => {
     controller.current = value;
   }, []);
@@ -56,6 +66,11 @@ export default function App() {
 
   function togglePanel(value: Panel) {
     setPanel((current) => (current === value ? null : value));
+  }
+
+  function closeLayerProperties() {
+    setLayerPropertiesOpen(false);
+    layerPropertiesButton.current?.focus();
   }
 
   return (
@@ -170,6 +185,51 @@ export default function App() {
                   </button>
                 )}
                 <div className="panel-divider" />
+                <h3 className="section-title">
+                  行政区划<span className="tag">{mapLayerLabels[scene.provinceStatus]}</span>
+                </h3>
+                <label className="toggle-row">
+                  <span>
+                    <Icon name="layers" size={17} />
+                    {provinceBoundary.name}
+                  </span>
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    checked={scene.provinceSettings.enabled}
+                    onChange={(e) => void controller.current?.setProvinceEnabled(e.target.checked)}
+                  />
+                  <span className="switch-track" />
+                </label>
+                <p className="quiet-description terrain-description" role="status">
+                  {scene.provinceStatus === 'loading' && '正在连接省界地图服务…'}
+                  {scene.provinceStatus === 'ready' && '省界描边 · 叠加于卫星影像上。'}
+                  {scene.provinceStatus === 'disabled' && '省界图层已关闭。'}
+                  {scene.provinceStatus === 'error' && scene.provinceError}
+                </p>
+                {scene.provinceStatus === 'error' && (
+                  <button className="text-button" onClick={() => controller.current?.retryProvinces()}>
+                    重试省界加载<Icon name="arrow" size={15} />
+                  </button>
+                )}
+                <div className="province-layer-actions">
+                  <button
+                    ref={layerPropertiesButton}
+                    className="text-button"
+                    aria-expanded={layerPropertiesOpen}
+                    onClick={() => setLayerPropertiesOpen((open) => !open)}
+                  >
+                    图层属性<Icon name="layers" size={15} />
+                  </button>
+                  <button
+                    className="text-button"
+                    onClick={() => controller.current?.focusProvinces()}
+                    disabled={!initialized}
+                  >
+                    定位到中国<Icon name="locate" size={15} />
+                  </button>
+                </div>
+                <div className="panel-divider" />
                 <h3 className="section-title">辅助图层</h3>
                 <label className="toggle-row">
                   <span>
@@ -197,6 +257,7 @@ export default function App() {
                 selectedPlaceId={scene.selection?.place?.geoname_id}
                 onSelectPlace={(place) => {
                   controller.current?.locate(place.longitude, place.latitude, placeCameraHeight(place), place);
+                  setLayerPropertiesOpen(false);
                   setInspectorOpen(true);
                 }}
               />
@@ -213,7 +274,22 @@ export default function App() {
           </div>
         </aside>
 
-        {inspectorOpen && (
+        {layerPropertiesOpen && (
+          <LayerPropertiesPanel
+            settings={scene.provinceSettings}
+            status={scene.provinceStatus}
+            error={scene.provinceError}
+            saved={scene.provinceSettingsSaved}
+            canLocate={initialized}
+            onChange={(patch) => controller.current?.updateProvinceSettings(patch)}
+            onLocate={() => controller.current?.focusProvinces()}
+            onRetry={() => controller.current?.retryProvinces()}
+            onReset={() => controller.current?.resetProvinceSettings()}
+            onClose={closeLayerProperties}
+          />
+        )}
+
+        {inspectorOpen && !layerPropertiesOpen && (
           <aside className="floating-panel inspector" aria-label="场景信息">
             <div className="panel-header">
               <div>
@@ -370,7 +446,12 @@ export default function App() {
               aria-label="显示场景信息"
               aria-pressed={inspectorOpen}
               title="场景信息"
-              onClick={() => setInspectorOpen((value) => !value)}
+              onClick={() => {
+                if (layerPropertiesOpen) {
+                  setLayerPropertiesOpen(false);
+                  setInspectorOpen(true);
+                } else setInspectorOpen((value) => !value);
+              }}
             >
               <Icon name="info" />
             </button>

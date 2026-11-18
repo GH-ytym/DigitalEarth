@@ -1,7 +1,10 @@
 import type { PlaceResult } from '../locations/types';
+import { defaultProvinceSettings } from '../layers/provinceSettings';
+import type { ProvinceSettings } from '../layers/provinceSettings';
 
 export type SceneModeName = '3D' | '2D';
 export type TerrainStatus = 'unconfigured' | 'disabled' | 'loading' | 'ready' | 'error';
+export type MapLayerStatus = 'disabled' | 'loading' | 'ready' | 'error';
 export interface GeoPosition {
   longitude: number;
   latitude: number;
@@ -21,6 +24,10 @@ export interface SceneSnapshot {
   selection: SelectedPosition | null;
   terrainStatus: TerrainStatus;
   terrainError?: string;
+  provinceStatus: MapLayerStatus;
+  provinceError?: string;
+  provinceSettings: ProvinceSettings;
+  provinceSettingsSaved?: boolean;
 }
 export const initialSnapshot: SceneSnapshot = {
   status: 'loading',
@@ -31,4 +38,6 @@ export const initialSnapshot: SceneSnapshot = {
   pointer: null,
   selection: null,
   terrainStatus: 'unconfigured',
+  provinceStatus: 'disabled',
+  provinceSettings: { ...defaultProvinceSettings },
 };

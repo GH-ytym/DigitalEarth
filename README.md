@@ -52,13 +52,44 @@ npm run preview
 
 ## 当前功能
 
-- 图层管理：Cesium ion 全球卫星影像、真实地形状态及网格辅助线。
+- 图层管理：Cesium ion 全球卫星影像、真实地形状态、中国省级行政区界线 WMS 叠加及网格辅助线。
 - 查询索引：真实 GeoNames 地名搜索、归属层级候选、键盘选择、地图定位，以及独立的坐标定位页签。
 - 地球浏览：缩放、旋转、倾斜、指北、初始视角、全球视角与二维/三维切换。
 - 地表坐标拾取、选中属性与相机高度显示。
 - 深蓝色工作台、白色文字和图标，以及蓝色背景的选中状态。
 
 全球影像与真实地形是独立资源。影像显示地表纹理，地形提供高程起伏，两者需要分别具备访问权限。
+
+## 中国省界地图服务
+
+前端通过 Cesium `WebMapServiceImageryProvider` 读取已发布的 `China:中国省级行政区`，默认开启，使用独立的 `China:province_outline_dynamic` 可调样式（透明填充、省界描边）叠加在卫星影像上。原 GeoServer 默认样式保持不变。进入“图层管理 → 行政区划”可以开关图层、定位到中国，以及在加载失败后重试。省界服务失败会单独显示提示。
+
+点击该图层的“图层属性”，可调整不透明度（0–100%）、线色和线宽（0.5、1、1.5、2、3、4、6 px），查看资源信息或恢复默认设置。颜色支持系统取色器和 `#RRGGBB` 输入。不透明度由 Cesium 即时调整；颜色和宽度通过 WMS `env` 参数由 GeoServer 重新渲染，连续修改会合并请求。加载新样式前保留上次有效图层；失败后可重试。
+
+显示开关和三个样式属性自动保存在当前浏览器、当前网站来源的 `localStorage` 中，刷新后恢复。存储键按服务地址和图层名称区分；更换浏览器、域名或端口时不会自动同步。存储受限时仍可调整，并会显示未保存提示。当前只有一个业务图层，上移和下移按钮禁用，卫星底图固定在底部。
+
+本地试验需要先启动 Docker Desktop 中的 `geoserver-lab / geoserver-local`，等待健康状态正常，再运行前端。GeoServer 地址为 `http://127.0.0.1:8081/geoserver/`，本地现有数据卷和发布配置由独立的 GeoServer 实验目录管理，本仓库不包含 Shapefile 或服务端管理凭据。
+
+开发服务和生产构建预览均将相对路径 `/geoserver` 代理到 `http://127.0.0.1:8081`。请求采用 WMS 1.1.1、EPSG:4326、透明 PNG，由 GeoServer 将原始 EPSG:4490 数据投影后输出。前端只接收地图图片；省份属性查询尚未接入。
+
+可以在 `frontend/.env.local` 中增加以下配置，已有 Cesium Token 无需更改：
+
+```dotenv
+VITE_PROVINCE_WMS_URL=/geoserver/China/wms
+VITE_PROVINCE_WMS_LAYER=China:中国省级行政区
+VITE_PROVINCE_WMS_STYLE=China:province_outline_dynamic
+DIGITALEARTH_GEOSERVER_TARGET=http://127.0.0.1:8081
+```
+
+图层名区分大小写。修改配置后重启 Vite；生产部署时，`VITE_*` 变更需要重新构建。将来迁移到 GIS 服务器，可以保留相对 URL，修改代理目标。正式静态部署需要在网站服务器配置 `/geoserver` 反向代理，Vite 的代理配置不会随 `dist` 自动部署；也可改用允许该前端来源跨域访问的完整 WMS 地址。
+
+首次部署可调样式时，在仓库根目录使用 PowerShell 7 执行下列命令，交互输入 GeoServer 管理凭据。脚本发布 [SLD 样式](infra/geoserver/province_outline_dynamic.sld)，将其登记为省界的可选样式，保留原默认样式；再次执行会更新这个专用可调样式。管理凭据仅用于发布，不进入前端配置。当前本机实验服务已完成此步骤。
+
+```powershell
+.\infra\geoserver\Publish-ProvinceStyle.ps1 -Credential (Get-Credential)
+```
+
+迁移时可用 `-GeoServerUrl https://服务器地址/geoserver` 指定目标，并先准备同名工作区和图层。前端设置校验、持久化及存储异常测试可在 `frontend` 运行 `npm run test`。
 
 ## 本地地名数据库
 
@@ -94,5 +125,6 @@ docker compose run --rm gazetteer verify --report /reports/verification.json
 - [CesiumJS 官方文档](https://cesium.com/learn/cesiumjs-learn/)
 - [Cesium ion Access Tokens](https://ion.cesium.com/tokens)
 - [Vite 环境变量说明](https://vite.dev/guide/env-and-mode)
+- [Cesium WMS 图层接口](https://cesium.com/learn/cesiumjs/ref-doc/WebMapServiceImageryProvider.html)
 
 全球影像及地形通过 Cesium ion 访问。运行界面保留 Cesium 及资源提供方署名，许可与第三方说明随静态资源发布。

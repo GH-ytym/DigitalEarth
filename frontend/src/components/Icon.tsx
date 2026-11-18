@@ -38,6 +38,8 @@ const paths = {
   close: <path d="m6 6 12 12M6 18 18 6" />,
   chevron: <path d="m9 5 7 7-7 7" />,
   arrow: <path d="M5 12h14m-5-5 5 5-5 5" />,
+  up: <path d="M12 20V4m-6 6 6-6 6 6" />,
+  down: <path d="M12 4v16m-6-6 6 6 6-6" />,
   info: (
     <>
       <circle cx="12" cy="12" r="9" />

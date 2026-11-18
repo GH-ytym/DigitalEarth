@@ -13,17 +13,25 @@ import {
   IonWorldImageryStyle,
   LabelStyle,
   Math as CesiumMath,
+  Rectangle,
   SceneMode,
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
   sampleTerrainMostDetailed,
   VerticalOrigin,
   Viewer,
+  WebMapServiceImageryProvider,
 } from 'cesium';
 import { sceneConfig } from '../../config/scene';
+import { provinceBoundary } from '../../config/mapServices';
 import { initialSnapshot } from './types';
 import type { GeoPosition, SelectedPosition, SceneSnapshot, TerrainStatus } from './types';
 import type { PlaceResult } from '../locations/types';
+import {
+  defaultProvinceSettings, loadProvinceSettings, normalizeProvinceSettings,
+  provinceSettingsKey, saveProvinceSettings,
+} from '../layers/provinceSettings';
+import type { ProvinceSettings } from '../layers/provinceSettings';
 
 /** Owns the Viewer and all Cesium resources. React only receives serializable data. */
 export class SceneController {
@@ -31,8 +39,16 @@ export class SceneController {
   private readonly input: ScreenSpaceEventHandler;
   private readonly disposers: Array<() => void> = [];
   private gridLayer?: ImageryLayer;
+  private provinceLayer?: ImageryLayer;
+  private provinceRequestId = 0;
+  private provinceReloadTimer?: ReturnType<typeof setTimeout>;
+  private readonly provinceStorageKey = provinceSettingsKey(provinceBoundary.url, provinceBoundary.layer);
+  private removeProvinceErrorListener?: () => void;
   private disposed = false;
-  private snapshot = { ...initialSnapshot };
+  private snapshot = {
+    ...initialSnapshot,
+    provinceSettings: loadProvinceSettings(this.provinceStorageKey),
+  };
   private lastPointerUpdate = 0;
   private requestedGrid = false;
   private terrainRequestId = 0;
@@ -112,6 +128,7 @@ export class SceneController {
       }),
     );
     this.gridLayer.show = this.requestedGrid;
+    if (this.snapshot.provinceSettings.enabled) void this.loadProvinceLayer();
     void this.loadImagery();
     void this.setTerrainEnabled(true);
   }
@@ -308,6 +325,113 @@ export class SceneController {
     this.viewer.scene.requestRender();
   }
 
+  setProvinceEnabled(enabled: boolean) {
+    if (this.disposed) return;
+    this.updateProvinceSettings({ enabled });
+  }
+
+  updateProvinceSettings(patch: Partial<ProvinceSettings>) {
+    if (this.disposed) return;
+    const previous = this.snapshot.provinceSettings;
+    const settings = normalizeProvinceSettings({ ...previous, ...patch });
+    const styleChanged = settings.lineColor !== previous.lineColor || settings.lineWidth !== previous.lineWidth;
+    this.emit({
+      provinceSettings: settings,
+      provinceSettingsSaved: saveProvinceSettings(this.provinceStorageKey, settings),
+    });
+    if (this.provinceLayer) this.provinceLayer.alpha = settings.opacity;
+    this.viewer.scene.requestRender();
+    if (!settings.enabled) {
+      clearTimeout(this.provinceReloadTimer);
+      ++this.provinceRequestId;
+      this.removeProvinceErrorListener?.();
+      this.removeProvinceErrorListener = undefined;
+      if (this.provinceLayer) this.viewer.imageryLayers.remove(this.provinceLayer, true);
+      this.provinceLayer = undefined;
+      this.emit({ provinceStatus: 'disabled', provinceError: undefined });
+    } else if (!previous.enabled || styleChanged) {
+      // Invalidate earlier responses immediately, including during the debounce interval.
+      ++this.provinceRequestId;
+      clearTimeout(this.provinceReloadTimer);
+      this.emit({ provinceStatus: 'loading', provinceError: undefined });
+      this.provinceReloadTimer = setTimeout(() => void this.loadProvinceLayer(), 250);
+    }
+  }
+
+  resetProvinceSettings() {
+    this.updateProvinceSettings({ ...defaultProvinceSettings });
+  }
+
+  retryProvinces() {
+    if (this.disposed || !this.snapshot.provinceSettings.enabled) return;
+    clearTimeout(this.provinceReloadTimer);
+    void this.loadProvinceLayer();
+  }
+
+  private async loadProvinceLayer() {
+    if (this.disposed || !this.snapshot.provinceSettings.enabled) return;
+    const requestId = ++this.provinceRequestId;
+    const settings = this.snapshot.provinceSettings;
+    this.emit({ provinceStatus: 'loading', provinceError: undefined });
+    try {
+      const { west, south, east, north } = provinceBoundary.bounds;
+      const provider = new WebMapServiceImageryProvider({
+        url: provinceBoundary.url,
+        layers: provinceBoundary.layer,
+        parameters: {
+          version: '1.1.1', format: 'image/png', transparent: true,
+          styles: provinceBoundary.style,
+          env: `lineColor:${settings.lineColor};lineWidth:${settings.lineWidth}`,
+        },
+        srs: 'EPSG:4326',
+        rectangle: Rectangle.fromDegrees(west, south, east, north),
+        enablePickFeatures: false,
+      });
+      // Verify a real PNG from the hemisphere containing China before reporting ready.
+      const probe = await provider.requestImage(1, 0, 0);
+      if (!probe) throw new Error('WMS image unavailable');
+      if (probe instanceof ImageBitmap) probe.close();
+      if (this.disposed || requestId !== this.provinceRequestId) return;
+      // Keep the last working layer visible until the replacement passes its PNG probe.
+      const previous = this.provinceLayer;
+      const index = previous ? this.viewer.imageryLayers.indexOf(previous) : undefined;
+      const layer = this.viewer.imageryLayers.addImageryProvider(provider, index);
+      layer.alpha = this.snapshot.provinceSettings.opacity;
+      this.removeProvinceErrorListener?.();
+      if (previous) this.viewer.imageryLayers.remove(previous, true);
+      this.provinceLayer = layer;
+      if (this.gridLayer) this.viewer.imageryLayers.raiseToTop(this.gridLayer);
+      this.removeProvinceErrorListener = provider.errorEvent.addEventListener(() => {
+        if (this.disposed || requestId !== this.provinceRequestId) return;
+        layer.show = false;
+        this.emit({
+          provinceStatus: 'error',
+          provinceError: '省界瓦片加载失败，请检查 GeoServer 后重试。',
+        });
+        this.viewer.scene.requestRender();
+      });
+      this.emit({ provinceStatus: 'ready', provinceError: undefined });
+      this.viewer.scene.requestRender();
+    } catch {
+      if (this.disposed || requestId !== this.provinceRequestId) return;
+      this.emit({
+        provinceStatus: 'error',
+        provinceError: this.provinceLayer?.show
+          ? '新样式加载失败，暂保留上次显示。请检查地图服务后重试。'
+          : '无法加载省界，请确认地图服务及可调样式可用，再重试。',
+      });
+    }
+  }
+
+  focusProvinces() {
+    const { west, south, east, north } = provinceBoundary.bounds;
+    this.viewer.camera.flyTo({
+      destination: Rectangle.fromDegrees(west - 2, south - 2, east + 2, north + 2),
+      duration: 1.2,
+      orientation: { heading: 0, pitch: -CesiumMath.PI_OVER_TWO, roll: 0 },
+    });
+  }
+
   async setTerrainEnabled(enabled: boolean) {
     if (this.disposed) return;
     if (
@@ -364,6 +488,9 @@ export class SceneController {
   destroy() {
     if (this.disposed) return;
     this.disposed = true;
+    clearTimeout(this.provinceReloadTimer);
+    ++this.provinceRequestId;
+    this.removeProvinceErrorListener?.();
     ++this.terrainRequestId;
     this.removeTerrainErrorListener?.();
     this.disposers.forEach((dispose) => dispose());
