@@ -29,21 +29,69 @@ with sync_playwright() as playwright:
     expect(page.locator(".satellite-choice")).to_have_count(3, timeout=60000)
     expect(page.locator(".satellite-panel-content input[type=number]")).to_have_count(0)
     expect(page.locator(".satellite-choice").filter(has_text="国际空间站")).to_be_visible()
+    toggle = page.get_by_role("button", name="时间轴与曲线", exact=True)
+    expect(toggle).to_be_disabled()
+    expect(toggle).to_have_attribute("aria-expanded", "false")
+    # Capture the real controller's Viewer for assertions; production exposes no debug globals.
+    page.evaluate("""async () => {
+      const moduleUrl = performance.getEntriesByType('resource')
+        .find(e => new URL(e.name).pathname === '/src/features/globe/SceneController.ts').name;
+      const { SceneController } = await import(moduleUrl);
+      const load = SceneController.prototype.loadSatellites;
+      SceneController.prototype.loadSatellites = function(...args) {
+        window.__testViewer = this.viewer;
+        return load.apply(this, args);
+      };
+    }""")
     load = page.get_by_role("button", name="加载所选卫星轨迹", exact=True)
     expect(load).to_be_enabled(timeout=60000)
     page.evaluate("window.__initialGlobeCanvas = document.querySelector('.cesium-widget canvas')")
     load.click()
     controls = page.get_by_role("region", name="卫星轨迹回放", exact=True)
-    expect(controls).to_be_visible(timeout=60000)
+    expect(toggle).to_be_enabled(timeout=60000)
+    page.wait_for_function("!!window.__testViewer")
+    expect(controls).to_have_count(0)
+    expect(page.locator(".satellite-position")).to_have_count(3)
+    page.wait_for_timeout(15000)
+    page.screenshot(path=str(OUT / "timeline-collapsed.png"))
+    toggle.click()
+    expect(toggle).to_have_attribute("aria-expanded", "true")
+    expect(controls).to_be_visible()
+    map_bounds = page.locator(".map-controls").bounding_box()
+    assert map_bounds["y"] + map_bounds["height"] < controls.bounding_box()["y"]
     expect(load).to_be_enabled()
     expect(page.locator(".cesium-widget canvas")).to_have_count(1)
     expect(page.locator(".satellite-position")).to_have_count(3)
+    subpoints = page.evaluate("""() => {
+      const viewer = window.__testViewer;
+      return viewer.dataSources.getByName('public-satellites')[0].entities.values
+        .filter(e => e.id.endsWith('-subpoint')).map(e => {
+          const p = e.position.getValue(viewer.clock.currentTime);
+          return { id:e.id, radius:Math.hypot(p.x,p.y,p.z),
+            label:e.label.text.getValue(viewer.clock.currentTime),
+            noTrail:!e.path && !e.polyline };
+        });
+    }""")
+    assert len(subpoints) == 3
+    assert all(p["noTrail"] and 6356750 < p["radius"] < 6378140 and "星下点" in p["label"] for p in subpoints)
+    assert "公开要素推算轨迹" not in page.locator("body").inner_text()
     old_time = controls.locator("time").inner_text()
     frame_a = page.locator(".globe-viewport").screenshot(path=str(OUT / "motion-a.png"))
     page.wait_for_function("text => document.querySelector('.satellite-controls time').textContent !== text", arg=old_time)
     page.wait_for_timeout(700)
     frame_b = page.locator(".globe-viewport").screenshot(path=str(OUT / "motion-b.png"))
     assert frame_a != frame_b
+    count_before_fold = len(requests)
+    before_fold = page.evaluate("window.__testViewer.clock.currentTime.toString()")
+    controls.get_by_role("button", name="折叠时间轴", exact=True).click()
+    expect(toggle).to_be_focused()
+    expect(controls).to_have_count(0)
+    expect(toggle).to_have_attribute("aria-expanded", "false")
+    page.wait_for_timeout(500)
+    assert page.evaluate("window.__testViewer.clock.shouldAnimate")
+    assert before_fold != page.evaluate("window.__testViewer.clock.currentTime.toString()")
+    assert len(requests) == count_before_fold
+    toggle.click()
     controls.get_by_role("button", name="暂停", exact=True).click()
     page.wait_for_timeout(200)
     paused = controls.locator("time").inner_text()
@@ -61,6 +109,16 @@ with sync_playwright() as playwright:
     expect(slider).to_have_value("0")
     assert len(requests) == count, "Playback controls must not issue backend requests."
     page.get_by_label("跟随卫星", exact=True).select_option("norad-25544")
+    page.wait_for_timeout(1800)
+    tracking = page.evaluate("""() => {
+      const v = window.__testViewer;
+      const p = v.trackedEntity.position.getValue(v.clock.currentTime);
+      const c = v.camera.positionWC;
+      return {distance:Math.hypot(c.x-p.x,c.y-p.y,c.z-p.z),height:v.camera.positionCartographic.height};
+    }""")
+    assert 2300000 < tracking["distance"] < 2600000, tracking
+    assert tracking["height"] > 1000000, tracking
+    page.screenshot(path=str(OUT / "satellite-follow.png"))
     page.get_by_label("跟随卫星", exact=True).select_option("")
     page.locator(".navigation").get_by_role("button",name="查询索引",exact=True).click()
     expect(page.get_by_role("tab",name="地名查询",exact=True)).to_be_visible()
@@ -79,17 +137,31 @@ with sync_playwright() as playwright:
     page.reload(wait_until="domcontentloaded")
     expect(page.locator(".satellite-history button").first).to_be_visible(timeout=60000)
     page.locator(".satellite-history button").first.click()
-    expect(page.get_by_role("region",name="卫星轨迹回放",exact=True)).to_be_visible(timeout=30000)
+    expect(toggle).to_be_enabled(timeout=30000)
+    expect(controls).to_have_count(0)
+    toggle.click()
+    expect(controls).to_be_visible()
     expect(load).to_be_enabled()
-    expect(page.locator(".satellite-message").filter(has_text="历史成果")).to_be_visible()
+    expect(page.locator(".satellite-message").filter(has_text="已加载保存的轨迹")).to_be_visible()
+    expect(page.locator(".scene-status")).to_have_text("场景就绪", timeout=60000)
     page.set_viewport_size({"width":1000,"height":760})
-    page.wait_for_timeout(400)
+    page.wait_for_timeout(2500)
     page.screenshot(path=str(OUT / "integrated-compact.png"))
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    toggle_bounds = toggle.bounding_box()
+    assert toggle_bounds["x"] > 700 and toggle_bounds["y"] > 720
+    map_bounds = page.locator(".map-controls").bounding_box()
+    assert map_bounds["y"] + map_bounds["height"] < controls.bounding_box()["y"]
+    credits_bounds = page.locator(".cesium-viewer-bottom").bounding_box()
+    assert credits_bounds["x"] + credits_bounds["width"] < map_bounds["x"]
+    toggle.click()
+    expect(controls).to_have_count(0)
+    expect(page.locator(".satellite-position")).to_have_count(3)
     assert not errors, errors
-    page.get_by_role("button",name="关闭卫星轨迹",exact=True).click()
+    page.get_by_role("button",name="卸载轨迹",exact=True).click()
     expect(page.get_by_role("region",name="卫星轨迹回放",exact=True)).to_have_count(0)
+    expect(toggle).to_be_disabled()
     expect(page.locator(".cesium-widget canvas")).to_have_count(1)
     (OUT / "browser-result.json").write_text(json.dumps({"page_errors":errors,"satellite_api_requests":len(requests)},indent=2),encoding="utf-8")
-    print("Integrated workspace passed: public catalog, one Viewer, SGP4 playback, cache reuse, history and existing panels.")
+    print("Integrated workspace passed: timeline folding, live subpoints without trails, distant tracking, cache reuse and existing panels.")
     browser.close()

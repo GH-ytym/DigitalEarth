@@ -47,6 +47,12 @@ const paths = {
     </>
   ),
   check: <path d="m5 12 4 4L19 6" />,
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 6v6l4 2" />
+    </>
+  ),
   mouse: (
     <>
       <rect x="6" y="2" width="12" height="20" rx="6" />

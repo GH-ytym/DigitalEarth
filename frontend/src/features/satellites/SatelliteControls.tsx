@@ -7,10 +7,10 @@ interface Props {
   onSeek: (elapsed: number) => void;
   onSpeed: (speed: number) => void;
   onFollow: (id: string | null) => void;
-  onClose: () => void;
+  onCollapse: () => void;
 }
-export function SatelliteControls({ state, onPlay, onSeek, onSpeed, onFollow, onClose }: Props) {
-  return <section className="floating-panel satellite-controls" aria-label="卫星轨迹回放">
+export function SatelliteControls({ state, onPlay, onSeek, onSpeed, onFollow, onCollapse }: Props) {
+  return <section id="satellite-timeline" className="floating-panel satellite-controls" aria-label="卫星轨迹回放">
     <div className="satellite-control-top">
       <div className="satellite-control-buttons">
         <button onClick={() => onPlay(!state.playing)}>{state.playing ? '暂停' : '播放'}</button>
@@ -23,9 +23,9 @@ export function SatelliteControls({ state, onPlay, onSeek, onSpeed, onFollow, on
         </select></label>
       </div>
       <time>{satelliteTime(state.currentUtc)}</time>
-      <button className="text-button" aria-label="关闭卫星轨迹" onClick={onClose}>关闭</button>
+      <button className="text-button" aria-label="折叠时间轴" onClick={onCollapse}>收起</button>
     </div>
-    <div className="satellite-time-label"><span>公开要素推算轨迹</span><span>{Math.floor(state.elapsed)} / {state.manifest.duration_s} s</span></div>
+    <div className="satellite-time-label"><span>{satelliteTime(state.manifest.epoch_utc)}</span><span>{Math.floor(state.elapsed)} / {state.manifest.duration_s} s</span></div>
     <input type="range" aria-label="卫星回放时间" min="0" max={state.manifest.duration_s} step="1"
       value={Math.floor(state.elapsed)} onChange={event => onSeek(Number(event.target.value))} />
   </section>;

@@ -52,9 +52,11 @@ export default function App() {
   const [scene, setScene] = useState<SceneSnapshot>(initialSnapshot);
   const [panel, setPanel] = useState<Panel | null>(() => new URLSearchParams(window.location.search).get('panel') === 'satellites' ? 'satellites' : 'query');
   const [grid, setGrid] = useState(false);
+  const [timelineOpen, setTimelineOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [layerPropertiesOpen, setLayerPropertiesOpen] = useState(false);
   const layerPropertiesButton = useRef<HTMLButtonElement>(null);
+  const timelineButton = useRef<HTMLButtonElement>(null);
   const onReady = useCallback((value: SceneController | null) => {
     controller.current = value;
   }, []);
@@ -97,7 +99,7 @@ export default function App() {
         <span className="version">V0.1</span>
       </header>
 
-      <main className={`workspace ${scene.satellitePlayback ? 'has-satellite-track' : ''}`}>
+      <main className={`workspace ${scene.satellitePlayback && timelineOpen ? 'timeline-expanded' : ''}`}>
         <GlobeViewport onReady={onReady} onSnapshot={onSnapshot} onError={onError} />
         <nav className="navigation" aria-label="工作区功能">
           {navigation.map((item) => (
@@ -469,12 +471,12 @@ export default function App() {
           </div>
         </div>
 
-        {scene.satellitePlayback && <SatelliteControls state={scene.satellitePlayback}
+        {scene.satellitePlayback && timelineOpen && <SatelliteControls state={scene.satellitePlayback}
           onPlay={enabled => controller.current?.playSatellites(enabled)}
           onSeek={elapsed => controller.current?.seekSatellites(elapsed)}
           onSpeed={speed => controller.current?.speedSatellites(speed)}
           onFollow={id => controller.current?.followSatellite(id)}
-          onClose={() => controller.current?.clearSatellites()} />}
+          onCollapse={() => { setTimelineOpen(false); timelineButton.current?.focus(); }} />}
 
         <div className="mouse-hint" hidden={!!scene.satellitePlayback}>
           <Icon name="mouse" size={14} />
@@ -530,6 +532,13 @@ export default function App() {
           <span>WGS84</span>
           <span className="status-mode">{scene.mode}</span>
         </div>
+        <button ref={timelineButton} className="timeline-toggle" aria-controls="satellite-timeline"
+          aria-expanded={!!scene.satellitePlayback && timelineOpen} disabled={!scene.satellitePlayback}
+          title={scene.satellitePlayback ? undefined : '加载卫星轨迹后展开'}
+          onClick={() => setTimelineOpen(open => !open)}>
+          <Icon name="clock" size={14} /><span>时间轴与曲线</span>
+          <Icon name="chevron" size={12} />
+        </button>
       </footer>
     </div>
   );

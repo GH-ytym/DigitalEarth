@@ -1,10 +1,11 @@
 import {
   ArcType, Cartesian2, Cartesian3, Cartographic, ClockRange, ClockStep, Color, CustomDataSource,
-  JulianDate, LabelStyle, LinearApproximation, Math as CesiumMath, ReferenceFrame,
+  HeightReference, JulianDate, LabelStyle, LinearApproximation, Math as CesiumMath, ReferenceFrame,
   SampledPositionProperty, TimeInterval, TimeIntervalCollection, VelocityOrientationProperty,
 } from 'cesium';
 import type { Entity, Viewer } from 'cesium';
 import type { SatelliteManifest, SatellitePlaybackState, SatelliteSamples } from './types';
+import { subsatellitePosition } from './subsatellitePosition';
 
 const colors = ['#80D9FA', '#FFBD7B', '#C5B1FF'];
 
@@ -36,14 +37,17 @@ export class SatellitePlayback {
       const position = new SampledPositionProperty(ReferenceFrame.FIXED);
       position.addSamplesPackedArray(track.samples.flat(), this.epoch);
       position.setInterpolationOptions({ interpolationAlgorithm: LinearApproximation, interpolationDegree: 1 });
+      const availability = new TimeIntervalCollection([new TimeInterval({
+        start: this.epoch, stop: JulianDate.fromIso8601(manifest.stop_utc),
+      })]);
       this.source.entities.add({ id: `${track.satellite_id}-orbit`, polyline: {
         positions: track.samples.map(([, x, y, z]) => new Cartesian3(x, y, z)),
         arcType: ArcType.NONE, width: 1.3, material: color.withAlpha(0.5),
       } });
       this.entities.push(this.source.entities.add({ id: track.satellite_id, position,
-        availability: new TimeIntervalCollection([new TimeInterval({
-          start: this.epoch, stop: JulianDate.fromIso8601(manifest.stop_utc),
-        })]),
+        availability,
+        // A metre-based offset in the tracking frame, independent of the model's size.
+        viewFrom: new Cartesian3(-1500000, -1500000, 1200000),
         orientation: new VelocityOrientationProperty(position),
         model: { uri: './models/satellite.glb', minimumPixelSize: 30, maximumScale: 80000 },
         point: { pixelSize: 6, color },
@@ -52,6 +56,15 @@ export class SatellitePlayback {
           style: LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cartesian2(0, -26) },
         path: { leadTime: 0, trailTime: 900, resolution: manifest.output_step_s, width: 2.5, material: color },
       }));
+      this.source.entities.add({ id: `${track.satellite_id}-subpoint`, availability,
+        position: subsatellitePosition(position),
+        point: { pixelSize: 10, color, outlineColor: Color.fromCssColorString('#06162e'),
+          outlineWidth: 2, heightReference: HeightReference.CLAMP_TO_GROUND },
+        label: { text: `${spec.object_name} 星下点`, font: '12px sans-serif', fillColor: color,
+          outlineColor: Color.fromCssColorString('#06162e'), outlineWidth: 3,
+          style: LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cartesian2(0, 18),
+          heightReference: HeightReference.CLAMP_TO_GROUND },
+      });
     });
     const clock = this.viewer.clock;
     clock.startTime = this.epoch.clone();
