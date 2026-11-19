@@ -1,4 +1,4 @@
-"""Bundle a local glTF 2 ZIP into a centred, self-contained GLB without changing its materials."""
+"""Import a local GLB or glTF 2 ZIP as a centred, self-contained GLB."""
 from base64 import b64decode
 from dataclasses import dataclass
 from itertools import product
@@ -154,14 +154,14 @@ def _normalize(document, blob):
             "position_count":vertex_count, "up_axis":"Y"}
 
 
-def _source_info(document, archive):
+def _source_info(document, archive=None):
     extras = document.get("asset", {}).get("extras", {})
     author = str(extras.get("author") or "")
     license_name = str(extras.get("license") or "")
     author_url = re.search(r"https?://[^\s)]+", author)
     license_url = re.search(r"https?://[^\s)]+", license_name)
     texts = [archive.read(name).decode("utf-8", errors="replace") for name in archive.namelist()
-             if PurePosixPath(name).name.lower() in {"license.txt", "licence.txt"}]
+             if PurePosixPath(name).name.lower() in {"license.txt", "licence.txt"}] if archive else []
     return {"author":author.split(" (http", 1)[0],
             "author_url":author_url.group(0) if author_url else "",
             "source_url":str(extras.get("source") or ""),
@@ -171,8 +171,8 @@ def _source_info(document, archive):
             "license_text":"\n\n".join(texts)}
 
 
-def validate_glb(data: bytes) -> dict:
-    """Check the GLB container and self-contained resources; return its JSON document."""
+def _read_glb(data):
+    """Read and validate the GLB container and its self-contained resources."""
     if len(data) < 20:
         raise ValueError("Invalid GLB header.")
     magic, version, length = struct.unpack_from("<III", data)
@@ -213,7 +213,47 @@ def validate_glb(data: bytes) -> dict:
         if "uri" in image or "bufferView" not in image or not image.get("mimeType"):
             raise ValueError("GLB image is not embedded.")
         check_view(image["bufferView"])
-    return document
+    return document, binary
+
+
+def validate_glb(data: bytes) -> dict:
+    """Check the GLB container and self-contained resources; return its JSON document."""
+    return _read_glb(data)[0]
+
+
+def _finish(document, blob, source, geometry):
+    if not document["asset"].get("copyright") and any(source[key] for key in ("author","source_url","license")):
+        document["asset"]["copyright"] = escape(f'{source["title"]} by {source["author"]}. '
+            f'Source: {source["source_url"]}. License: {source["license"]} ({source["license_url"]}).')
+    raw_json = json.dumps(document, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    raw_json += b" " * (-len(raw_json) % 4)
+    blob = bytearray(blob)
+    blob.extend(b"\x00" * (-len(blob) % 4))
+    chunks = struct.pack("<II", len(raw_json), 0x4E4F534A) + raw_json
+    chunks += struct.pack("<II", len(blob), 0x004E4942) + blob
+    result = struct.pack("<III", 0x46546C67, 2, 12+len(chunks)) + chunks
+    validate_glb(result)
+    return PackedModel(result, source, geometry)
+
+
+def pack_model_glb(path: Path) -> PackedModel:
+    """Normalize a self-contained GLB, preserving geometry and embedded image bytes."""
+    if path.stat().st_size > 128*1024*1024:
+        raise ValueError("Model file is too large.")
+    document, blob = _read_glb(path.read_bytes())
+    source = _source_info(document)
+    source["title"] = source["title"] or path.stem
+    geometry = _normalize(document, blob)
+    return _finish(document, blob, source, geometry)
+
+
+def pack_model(path: Path) -> PackedModel:
+    """Import either supported local model format without changing its source file."""
+    if path.suffix.lower() == ".glb":
+        return pack_model_glb(path)
+    if path.suffix.lower() == ".zip":
+        return pack_model_zip(path)
+    raise ValueError("Model input must be a .glb file or a glTF .zip archive.")
 
 
 def pack_model_zip(path: Path) -> PackedModel:
@@ -269,13 +309,4 @@ def pack_model_zip(path: Path) -> PackedModel:
             image["mimeType"] = mime
             views.append({"buffer":0,"byteOffset":_append(blob, payload),"byteLength":len(payload)})
         document["buffers"] = [{"byteLength":len(blob)}]
-        document["asset"]["copyright"] = escape(f'{source["title"]} by {source["author"]}. '
-            f'Source: {source["source_url"]}. License: {source["license"]} ({source["license_url"]}).')
-        raw_json = json.dumps(document, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
-        raw_json += b" " * (-len(raw_json) % 4)
-        blob.extend(b"\x00" * (-len(blob) % 4))
-        chunks = struct.pack("<II", len(raw_json), 0x4E4F534A) + raw_json
-        chunks += struct.pack("<II", len(blob), 0x004E4942) + blob
-        result = struct.pack("<III", 0x46546C67, 2, 12+len(chunks)) + chunks
-        validate_glb(result)
-        return PackedModel(result, source, geometry)
+        return _finish(document, blob, source, geometry)

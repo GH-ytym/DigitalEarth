@@ -4,7 +4,7 @@ import json
 import sys
 
 from config import Settings
-from model_pack import pack_model_zip
+from model_pack import pack_model
 from model_store import ModelRegistry
 from storage import Store
 
@@ -14,7 +14,7 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("list")
     upload = commands.add_parser("import")
-    upload.add_argument("archive")
+    upload.add_argument("model", help="Path to a self-contained .glb or a glTF .zip archive")
     upload.add_argument("--slug", required=True)
     upload.add_argument("--name")
     upload.add_argument("--set-default", action="store_true")
@@ -36,7 +36,7 @@ def main():
     registry.initialize()
     if args.command == "import":
         from pathlib import Path
-        packed = pack_model_zip(Path(args.archive))
+        packed = pack_model(Path(args.model))
         result = registry.register(args.slug,args.name or packed.source_info["title"],packed.data,
             packed.source_info,packed.geometry_info,
             dict(scale=args.scale,minimum_pixel_size=args.minimum_pixel_size,maximum_scale=args.maximum_scale),

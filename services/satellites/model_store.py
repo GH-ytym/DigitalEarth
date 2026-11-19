@@ -166,8 +166,8 @@ class ModelRegistry:
             if asset and asset["current_version_id"]:
                 self.set_default(asset["id"])
             else:
-                from model_pack import pack_model_zip
-                packed = pack_model_zip(ROOT / "simple_satellite_low_poly_free.zip")
+                from model_pack import pack_model
+                packed = pack_model(ROOT / "simple_satellite_low_poly_free.glb")
                 self.register("simple-satellite-low-poly-free", "Simple Satellite Low Poly Free", packed.data,
                     packed.source_info, packed.geometry_info, make_default=True)
         with self.store.connect() as conn:

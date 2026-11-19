@@ -84,7 +84,7 @@ SGP4 输出 TEME 位置（km）。本模块按每个采样时刻的 GMST 旋转�
 
 Python 为输出数组分配内存，DLL 接收数值数组和输出指针，写出行数并返回错误码。C++ 异常在导出边界捕获；内部 `elsetrec`、类和 STL 不穿过 ABI。DLL 不知道 HTTP 和前端，也不访问 MinIO 或数据库。
 
-GLB 是原创示意模型，在远距离放大以便辨认；轨道位置使用实际米制坐标。模型按速度方向摆放，不代表真实卫星姿态。空间轨迹不贴地，地固视角下的曲线也不必闭合为同一平面椭圆。
+GLB 是通用卫星示意模型，在远距离放大以便辨认；轨道位置使用实际米制坐标。模型按速度方向摆放，不代表真实卫星姿态。空间轨迹不贴地，地固视角下的曲线也不必闭合为同一平面椭圆。
 
 参考：[SGP4 原始说明与坐标输出](https://celestrak.org/publications/AIAA/2006-6753/faq.php)。
 
@@ -104,9 +104,9 @@ Vite 开发和预览把更具体的 `/api/v1/satellites` 路由放在通用 `/ap
 
 ## 模型资产与版本
 
-模型文件存于 MinIO 的 `satellite-models` 桶（`ORBIT_MODEL_BUCKET` 可配置），PostgreSQL 的 `model_assets` 管理资产及唯一默认模型，`model_versions` 保存不可变版本、对象键、显示参数及作者许可，`satellite_model_bindings` 保存 NORAD 绑定。绑定的 `asset_id=NULL` 表示继承数据库默认模型，非空则覆盖。首次启动导入内置模型与 `services/satellites/simple_satellite_low_poly_free.zip`，把后者设为默认并登记当前十颗卫星的继承关系；重启保留已有默认选择、版本和绑定。
+模型文件存于 MinIO 的 `satellite-models` 桶（`ORBIT_MODEL_BUCKET` 可配置），PostgreSQL 的 `model_assets` 管理资产及唯一默认模型，`model_versions` 保存不可变版本、对象键、显示参数及作者许可，`satellite_model_bindings` 保存 NORAD 绑定。绑定的 `asset_id=NULL` 表示继承数据库默认模型，非空则覆盖。首次启动导入内置模型与 `services/satellites/simple_satellite_low_poly_free.glb`，把后者设为默认并登记当前十颗卫星的继承关系；重启保留已有默认选择、版本和绑定。
 
-`model_pack.py` 将 ZIP 中的 glTF、二进制与纹理整理为自包含 GLB，居中并把最大跨度归一为 10 米。原纹理、材质和节点朝向保留，作者与许可写入 GLB 及模型记录。当前模型基于 [Simple Satellite Low Poly Free](https://sketchfab.com/3d-models/simple-satellite-low-poly-free-f23b484cda664f1cb91b4f62ea5ef8bf)，作者 [DjalalxJay](https://sketchfab.com/djalalxjay)，许可 [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/)。前端在来源详情和模型自带版权信息中保留归属；上述打包、居中和缩放为本项目的处理。
+`model_pack.py` 支持直接导入自包含 GLB，也支持将 ZIP 中的 glTF、二进制与纹理合并。两种输入都居中并把最大跨度归一为 10 米，这是显示基准，不代表卫星真实尺寸。原几何、纹理、材质和节点朝向保留，作者与许可写入 GLB 及模型记录；GLB 不依赖本地相邻文件，外部资源引用会被拒绝。当前种子约 3.05 MB，四张纹理均为 1024×1024，基于 [Simple Satellite Low Poly Free](https://sketchfab.com/3d-models/simple-satellite-low-poly-free-f23b484cda664f1cb91b4f62ea5ef8bf)，作者 [DjalalxJay](https://sketchfab.com/djalalxjay)，许可 [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/)。前端在来源详情和模型自带版权信息中保留归属；上述打包、居中和缩放为本项目的处理。
 
 加载新轨迹或历史成果后，前端调用 `POST /api/v1/satellites/models/resolve` 查询当前模型绑定，再按 `GET /api/v1/satellites/models/versions/{version_id}/model.glb` 从 FastAPI 代理下载私有 MinIO 对象。绑定信息不缓存，版本文件允许长期缓存。历史目录外的编号也能继承默认模型。模型不会写入轨迹 manifest 或结果键，因此替换模型不重算 SGP4、不改变历史轨迹。
 
@@ -114,14 +114,14 @@ Vite 开发和预览把更具体的 `/api/v1/satellites` 路由放在通用 `/ap
 
 ```powershell
 uv run python manage_models.py list
-uv run python manage_models.py import simple_satellite_low_poly_free.zip --slug simple-satellite-low-poly-free --set-default
+uv run python manage_models.py import simple_satellite_low_poly_free.glb --slug simple-satellite-low-poly-free --set-default
 uv run python manage_models.py set-default <asset_id>
 uv run python manage_models.py activate <asset_id> <version_id>
 uv run python manage_models.py bind 25544 --asset <asset_id>
 uv run python manage_models.py bind 25544 --default
 ```
 
-导入同一 slug 会追加版本并激活新版本，旧文件与记录保留；`activate` 可回切已有版本。管理命令不初始化轨迹任务，不会影响正在进行的轨迹计算。导入失败时保留旧默认模型。`GET /api/v1/satellites/models` 提供资产和版本列表。
+输入路径可以是任意可读位置的 GLB 或 ZIP；导入后使用 MinIO 对象，本地移动或覆盖文件不会自动替换模型。导入同一 slug 会追加版本并激活新版本，旧文件与记录保留；`activate` 可回切已有版本。管理命令不初始化轨迹任务，不会影响正在进行的轨迹计算。导入失败时保留旧默认模型。`GET /api/v1/satellites/models` 提供资产和版本列表。
 
 ## 代码阅读与验证
 
