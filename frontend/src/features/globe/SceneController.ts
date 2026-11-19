@@ -25,7 +25,7 @@ import {
 import { sceneConfig } from '../../config/scene';
 import { provinceBoundary } from '../../config/mapServices';
 import { SatellitePlayback } from '../satellites/SatellitePlayback';
-import type { SatelliteManifest, SatelliteSamples } from '../satellites/types';
+import type { SatelliteManifest, SatelliteModel, SatelliteSamples } from '../satellites/types';
 import { initialSnapshot } from './types';
 import type { GeoPosition, SelectedPosition, SceneSnapshot, TerrainStatus } from './types';
 import type { PlaceResult } from '../locations/types';
@@ -492,7 +492,7 @@ export class SceneController {
     this.viewer.scene.requestRender();
   }
 
-  loadSatellites(manifest: SatelliteManifest, samples: SatelliteSamples) { this.satellitePlayback.load(manifest, samples); }
+  loadSatellites(manifest: SatelliteManifest, samples: SatelliteSamples, models: SatelliteModel[]) { this.satellitePlayback.load(manifest, samples, models); }
   playSatellites(enabled: boolean) { this.satellitePlayback.play(enabled); }
   seekSatellites(seconds: number) { this.satellitePlayback.seek(seconds); }
   speedSatellites(speed: number) { this.satellitePlayback.speed(speed); }

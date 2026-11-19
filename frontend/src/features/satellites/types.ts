@@ -48,6 +48,26 @@ export interface SatelliteSamples {
   result_id: string;
   satellites: Array<{ satellite_id: string; samples: number[][] }>;
 }
+export interface SatelliteModel {
+  norad_id: number;
+  asset_id: string;
+  asset_name: string;
+  version_id: string;
+  version: number;
+  model_url: string;
+  render_options: { scale: number; minimum_pixel_size: number; maximum_scale: number };
+  source_info: {
+    author: string;
+    source_url: string;
+    license: string;
+    license_url: string;
+    title: string;
+    license_text?: string;
+  };
+}
+export interface SatelliteModelResolution {
+  models: SatelliteModel[];
+}
 export interface SatelliteJob {
   job_id: string;
   result_id: string;
@@ -64,6 +84,7 @@ export interface SavedTrack {
 }
 export interface SatellitePlaybackState {
   manifest: SatelliteManifest;
+  models: SatelliteModel[];
   elapsed: number;
   currentUtc: string;
   playing: boolean;

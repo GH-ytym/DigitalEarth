@@ -30,7 +30,7 @@
 | --- | --- |
 | 主前端 | `127.0.0.1:5173`，生产预览 `4173` |
 | 卫星 API | `127.0.0.1:8093/api/v1/satellites` |
-| PostgreSQL | `127.0.0.1:55433` |
+| PostgreSQL | `127.0.0.1:${ORBIT_DB_PORT}`，默认 `55433`；Compose 与 API 共用端口配置 |
 | MinIO S3 / 管理界面 | `127.0.0.1:19000` / `19001` |
 | 服务配置 | `services/satellites/.env`，不提交 |
 | DLL | `services/satellites/build/satellites.dll`，不提交 |
@@ -102,6 +102,27 @@ GLB 是原创示意模型，在远距离放大以便辨认；轨道位置使用�
 
 Vite 开发和预览把更具体的 `/api/v1/satellites` 路由放在通用 `/api` 前面，因此不影响原 Go 地名服务。正式静态部署也要在网站服务器设置等价反向代理；Vite 配置不会随 `dist` 自动部署。卫星 API 的目标可通过 `DIGITALEARTH_SATELLITES_TARGET` 配置。
 
+## 模型资产与版本
+
+模型文件存于 MinIO 的 `satellite-models` 桶（`ORBIT_MODEL_BUCKET` 可配置），PostgreSQL 的 `model_assets` 管理资产及唯一默认模型，`model_versions` 保存不可变版本、对象键、显示参数及作者许可，`satellite_model_bindings` 保存 NORAD 绑定。绑定的 `asset_id=NULL` 表示继承数据库默认模型，非空则覆盖。首次启动导入内置模型与 `services/satellites/simple_satellite_low_poly_free.zip`，把后者设为默认并登记当前十颗卫星的继承关系；重启保留已有默认选择、版本和绑定。
+
+`model_pack.py` 将 ZIP 中的 glTF、二进制与纹理整理为自包含 GLB，居中并把最大跨度归一为 10 米。原纹理、材质和节点朝向保留，作者与许可写入 GLB 及模型记录。当前模型基于 [Simple Satellite Low Poly Free](https://sketchfab.com/3d-models/simple-satellite-low-poly-free-f23b484cda664f1cb91b4f62ea5ef8bf)，作者 [DjalalxJay](https://sketchfab.com/djalalxjay)，许可 [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/)。前端在来源详情和模型自带版权信息中保留归属；上述打包、居中和缩放为本项目的处理。
+
+加载新轨迹或历史成果后，前端调用 `POST /api/v1/satellites/models/resolve` 查询当前模型绑定，再按 `GET /api/v1/satellites/models/versions/{version_id}/model.glb` 从 FastAPI 代理下载私有 MinIO 对象。绑定信息不缓存，版本文件允许长期缓存。历史目录外的编号也能继承默认模型。模型不会写入轨迹 manifest 或结果键，因此替换模型不重算 SGP4、不改变历史轨迹。
+
+在 `services/satellites` 目录使用管理命令，操作立即写入 PostgreSQL；已加载场景在重新加载轨迹后采用最新绑定：
+
+```powershell
+uv run python manage_models.py list
+uv run python manage_models.py import simple_satellite_low_poly_free.zip --slug simple-satellite-low-poly-free --set-default
+uv run python manage_models.py set-default <asset_id>
+uv run python manage_models.py activate <asset_id> <version_id>
+uv run python manage_models.py bind 25544 --asset <asset_id>
+uv run python manage_models.py bind 25544 --default
+```
+
+导入同一 slug 会追加版本并激活新版本，旧文件与记录保留；`activate` 可回切已有版本。管理命令不初始化轨迹任务，不会影响正在进行的轨迹计算。导入失败时保留旧默认模型。`GET /api/v1/satellites/models` 提供资产和版本列表。
+
 ## 代码阅读与验证
 
 按以下顺序阅读即可跟踪一条完整链路：
@@ -112,13 +133,14 @@ Vite 开发和预览把更具体的 `/api/v1/satellites` 路由放在通用 `/ap
 4. `dll_adapter.py`、`native/orbit.cpp`：GP 字段转换、内存、SGP4 与 TEME 转换。
 5. `storage.py`：索引和完整采样分开保存。
 6. `frontend/src/features/satellites/SatellitePlayback.ts`：同一 Viewer 中的数据源、时钟和渲染。
+7. `model_pack.py`、`model_store.py`、`manage_models.py`：模型整理、PostgreSQL 版本与绑定、MinIO 文件和管理命令。
 
 前端在 `frontend` 执行 `npm.cmd run test`、`npm.cmd run build`。卫星后端保持存储容器运行、停止 API，然后在服务目录执行：
 
 ```powershell
-uv run python -m unittest discover -s tests -p test_satellites.py -v
+uv run python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-测试将三份实际公开 GP 数据的 DLL 输出与 Python SGP4 参考实现比较，并验证缓冲区边界、保存、复用及应用重建。SGP4 包仅用于开发测试，不参与生产传播。
+测试将实际公开 GP 数据的 DLL 输出与 Python SGP4 参考实现比较，并验证缓冲区边界、保存、复用及应用重建；模型测试覆盖自包含 GLB、版本与绑定切换、文件/数据库发布失败及历史轨迹复用。SGP4 包仅用于开发测试，不参与生产传播。
 
 主前端和 API 启动后，在服务目录执行 `uv run python tests/browser_main.py`，验证单 Viewer、动态运行、时间轴展开与折叠、跟随视角、暂停/倍速/拖动无 API 调用、历史恢复，以及原图层和查询面板。前端单元测试验证星下点的椭球投影、插值时刻和时间范围。截图和临时运行结果位于仓库 `work/satellites`，不进入提交。

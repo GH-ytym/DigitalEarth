@@ -17,6 +17,7 @@ class Settings:
     minio_user: str = os.getenv("ORBIT_MINIO_USER", "")
     minio_password: str = os.getenv("ORBIT_MINIO_PASSWORD", "")
     bucket: str = os.getenv("ORBIT_BUCKET", "satellite-results")
+    model_bucket: str = os.getenv("ORBIT_MODEL_BUCKET", "satellite-models")
 
     def db_kwargs(self):
         return dict(host=self.db_host, port=self.db_port, dbname=self.db_name,

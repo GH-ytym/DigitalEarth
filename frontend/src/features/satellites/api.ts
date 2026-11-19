@@ -1,10 +1,41 @@
-import type { SavedTrack, SatelliteCatalog, SatelliteJob, SatelliteManifest, SatelliteSamples } from './types';
+import type { SavedTrack, SatelliteCatalog, SatelliteJob, SatelliteManifest, SatelliteModelResolution, SatelliteSamples } from './types';
 
 export const satelliteApi = '/api/v1/satellites';
 function object(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object';
 }
 const validDate = (value: unknown): value is string => typeof value === 'string' && Number.isFinite(Date.parse(value));
+const validUUID = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
+const positiveNumber = (value: unknown, maximum: number): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= maximum;
+function sourceURL(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  if (!value) return true;
+  try { return ['http:', 'https:'].includes(new URL(value).protocol); } catch { return false; }
+}
+
+export function isModelResolution(value: unknown, noradIds: readonly number[]): value is SatelliteModelResolution {
+  const required = new Set(noradIds);
+  if (!noradIds.length || noradIds.length > 3 || required.size !== noradIds.length ||
+      !noradIds.every(id => Number.isSafeInteger(id) && id > 0) || !object(value) ||
+      !Array.isArray(value.models) || value.models.length !== required.size) return false;
+  const seen = new Set<number>();
+  return value.models.every(model => {
+    if (!object(model) || !Number.isSafeInteger(model.norad_id) || !required.has(model.norad_id as number) ||
+        seen.has(model.norad_id as number) || !validUUID(model.asset_id) || !validUUID(model.version_id) ||
+        typeof model.asset_name !== 'string' || !model.asset_name.trim() || !Number.isSafeInteger(model.version) || (model.version as number) < 1 ||
+        model.model_url !== `${satelliteApi}/models/versions/${model.version_id}/model.glb` ||
+        !object(model.render_options) || !object(model.source_info)) return false;
+    const options = model.render_options;
+    const source = model.source_info;
+    if (!positiveNumber(options.scale, 1e6) || !positiveNumber(options.minimum_pixel_size, 4096) ||
+        !positiveNumber(options.maximum_scale, 1e9) || options.maximum_scale < options.scale ||
+        typeof source.author !== 'string' || typeof source.title !== 'string' || typeof source.license !== 'string' ||
+        !sourceURL(source.source_url) || !sourceURL(source.license_url) ||
+        (source.license_text !== undefined && typeof source.license_text !== 'string')) return false;
+    seen.add(model.norad_id as number);
+    return true;
+  });
+}
 
 export function isManifest(value: unknown): value is SatelliteManifest {
   if (!object(value) || value.schema_version !== 'satellites-1' || value.position_frame !== 'ECEF_APPROX' || value.position_unit !== 'm') return false;
@@ -71,9 +102,23 @@ export async function satelliteJSON<T>(path: string, signal: AbortSignal, body?:
 export async function loadSavedTrack(id: string, signal: AbortSignal) {
   const manifest = await satelliteJSON<unknown>(`${satelliteApi}/tracks/${id}`, signal);
   if (!isManifest(manifest)) throw new Error('卫星成果说明格式异常。');
-  const samples = await satelliteJSON<unknown>(manifest.samples_url, signal);
+  const models = (async () => {
+    let response: unknown;
+    try {
+      response = await satelliteJSON<unknown>(`${satelliteApi}/models/resolve`, signal,
+        { norad_ids: manifest.satellites.map(sat => sat.norad_id) });
+    } catch (error) {
+      if (signal.aborted) throw error;
+      throw new Error(`卫星模型解析失败：${error instanceof Error ? error.message : '请检查模型服务。'}`);
+    }
+    if (!isModelResolution(response, manifest.satellites.map(sat => sat.norad_id))) {
+      throw new Error('卫星模型配置格式异常，当前场景已保留。');
+    }
+    return response.models;
+  })();
+  const [samples, resolvedModels] = await Promise.all([satelliteJSON<unknown>(manifest.samples_url, signal), models]);
   if (!isSamples(samples, manifest)) throw new Error('卫星轨迹采样格式异常。');
-  return { manifest, samples };
+  return { manifest, samples, models: resolvedModels };
 }
 export async function loadSelectedTrack(ids: number[], signal: AbortSignal) {
   const submitted = await satelliteJSON<SatelliteJob>(`${satelliteApi}/tracks`, signal, { norad_ids: ids });

@@ -1,15 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
 import { loadSavedTrack, loadSelectedTrack, readCatalog, readHistory } from './api';
-import type { SavedTrack, SatelliteCatalog, SatelliteManifest, SatellitePlaybackState, SatelliteSamples } from './types';
+import type { SavedTrack, SatelliteCatalog, SatelliteManifest, SatelliteModel, SatellitePlaybackState, SatelliteSamples } from './types';
 
 export function satelliteTime(value: string) {
   return `${value.replace('T', ' ').slice(0, 19)} UTC`;
+}
+function sourceLink(url: string, text: string) {
+  try {
+    if (['http:', 'https:'].includes(new URL(url).protocol)) {
+      return <a href={url} target="_blank" rel="noreferrer">{text}</a>;
+    }
+  } catch { /* A missing source URL is displayed as text. */ }
+  return text;
 }
 interface Props {
   active: boolean;
   playback: SatellitePlaybackState | null;
   ready: boolean;
-  onLoad: (manifest: SatelliteManifest, samples: SatelliteSamples) => void;
+  onLoad: (manifest: SatelliteManifest, samples: SatelliteSamples, models: SatelliteModel[]) => void;
   onFocus: () => void;
   onClear: () => void;
 }
@@ -30,6 +38,7 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
   const query = search.trim().toLocaleLowerCase();
   const visible = catalog?.satellites.filter(sat => (!category || sat.category === category) &&
     `${sat.display_name} ${sat.object_name} ${sat.norad_id}`.toLocaleLowerCase().includes(query)) ?? [];
+  const modelSources = [...new Map(playback?.models.map(model => [model.version_id, model])).values()];
 
   function applyCatalog(value: SatelliteCatalog) {
     catalogLoaded.current = true;
@@ -68,7 +77,7 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
           ? await loadSelectedTrack(selected, controller.signal)
           : await loadSavedTrack(action, controller.signal);
         if (controller.signal.aborted) return;
-        onLoad(data.manifest, data.samples);
+        onLoad(data.manifest, data.samples, data.models);
         setSelected(data.manifest.satellites.map(sat => sat.norad_id)
           .filter(id => catalog?.satellites.some(sat => sat.norad_id === id)).slice(0, limit));
         setMessage(action !== 'load' ? '已加载保存的轨迹。'
@@ -76,7 +85,10 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
         setHistory(await readHistory(controller.signal));
       }
     } catch (err) {
-      if (!controller.signal.aborted) setError(err instanceof Error ? err.message : '卫星数据加载失败。');
+      if (!controller.signal.aborted) {
+        setMessage('');
+        setError(err instanceof Error ? err.message : '卫星数据加载失败。');
+      }
     } finally {
       if (!controller.signal.aborted) setBusy(false);
     }
@@ -124,7 +136,13 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
       </div>
       <div className="satellite-actions"><button className="text-button" onClick={onFocus}>查看全部轨迹</button><button className="text-button" onClick={onClear}>卸载轨迹</button></div>
       <details className="satellite-provenance"><summary>数据获取时间与来源</summary>
-        {playback.manifest.satellites.map(sat => <p key={sat.satellite_id}><a href={sat.source_url} target="_blank" rel="noreferrer">{sat.object_name}</a><br />要素：{satelliteTime(sat.element_epoch_utc)}<br />获取：{satelliteTime(sat.fetched_at)}</p>)}
+        {playback.manifest.satellites.map(sat => <p key={sat.satellite_id}>{sourceLink(sat.source_url, sat.object_name)}<br />要素：{satelliteTime(sat.element_epoch_utc)}<br />获取：{satelliteTime(sat.fetched_at)}</p>)}
+        {modelSources.map(model => <div key={model.version_id}>
+          <p>模型：{model.asset_name} · v{model.version}<br />作者：{model.source_info.author}<br />
+            来源：{sourceLink(model.source_info.source_url, model.source_info.title || model.asset_name)}<br />
+            许可：{sourceLink(model.source_info.license_url, model.source_info.license)}</p>
+          {model.source_info.license_text && <details><summary>许可说明</summary><p>{model.source_info.license_text}</p></details>}
+        </div>)}
       </details>
     </>}
     <div className="panel-divider" />

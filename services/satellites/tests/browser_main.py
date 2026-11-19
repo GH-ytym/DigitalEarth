@@ -90,6 +90,7 @@ with sync_playwright() as playwright:
         window.__testViewer = this.viewer;
         window.__testManifest = args[0];
         window.__testSamples = args[1];
+        window.__testModels = args[2];
         return load.apply(this, args);
       };
     }""")
@@ -111,6 +112,28 @@ with sync_playwright() as playwright:
     expect(controls).to_have_count(0)
     expect(page.locator(".satellite-position")).to_have_count(3)
     page.wait_for_timeout(15000)
+    page.wait_for_function("""() => {
+      const v=window.__testViewer;
+      const models=Array.from({length:v.scene.primitives.length},(_,i)=>v.scene.primitives.get(i))
+        .filter(p=>p.id?.id?.startsWith('norad-') && p.ready);
+      return models.length===3 && models.every(p=>p._texturesLoaded);
+    }""",timeout=60000)
+    model_bindings = page.evaluate("window.__testModels")
+    assert len(model_bindings)==3
+    assert all(model["asset_name"]=="Simple Satellite Low Poly Free" for model in model_bindings)
+    assert all(model["source_info"]["author"]=="DjalalxJay" for model in model_bindings)
+    assert len({model["version_id"] for model in model_bindings})==1
+    provenance = page.locator(".satellite-provenance")
+    provenance.locator(":scope > summary").click()
+    expect(provenance.locator(":scope > div > p").filter(has_text="DjalalxJay")).to_be_visible()
+    expect(provenance.get_by_role("link",name="CC-BY-4.0",exact=True)).to_be_visible()
+    provenance.locator(":scope > summary").click()
+    page.locator(".satellites-panel .panel-content").evaluate("e=>e.scrollTop=0")
+    assert page.evaluate("""() => {
+      const v=window.__testViewer;
+      return v.dataSources.getByName('public-satellites')[0].entities.values.filter(e=>e.model)
+        .every(e=>e.model.uri.getValue(v.clock.currentTime).startsWith('/api/v1/satellites/models/versions/'));
+    }""")
     page.screenshot(path=str(OUT / "timeline-collapsed.png"))
     toggle.click()
     expect(toggle).to_have_attribute("aria-expanded", "true")
@@ -215,6 +238,18 @@ with sync_playwright() as playwright:
     page.get_by_role("button",name="查看全部轨迹",exact=True).click()
     page.wait_for_timeout(1200)
     page.screenshot(path=str(OUT / "integrated-desktop.png"))
+    # A model-resolution error must leave the loaded orbit and model entities intact.
+    preserved = page.evaluate("window.__testManifest.result_id")
+    failure_route = "**/api/v1/satellites/models/resolve"
+    page.route(failure_route,lambda route: route.fulfill(status=503,content_type="application/json",
+                                                        body=json.dumps({"detail":"模型服务测试失败。"})))
+    load.click()
+    expect(page.get_by_role("alert").filter(has_text="卫星模型解析失败")).to_be_visible(timeout=30000)
+    expect(load).to_be_enabled()
+    assert page.evaluate("window.__testManifest.result_id")==preserved
+    expect(page.locator(".satellite-position")).to_have_count(3)
+    assert page.evaluate("document.querySelector('.cesium-widget canvas') === window.__initialGlobeCanvas")
+    page.unroute(failure_route)
     # Each orbital scale must be framed automatically, without a manual zoom-out.
     for label, ids, duration, step, target in (
         ("meo", [36585,37846,43001],86400,30,36585),
@@ -298,5 +333,5 @@ with sync_playwright() as playwright:
     expect(toggle).to_be_disabled()
     expect(page.locator(".cesium-widget canvas")).to_have_count(1)
     (OUT / "browser-result.json").write_text(json.dumps({"page_errors":errors,"satellite_api_requests":len(requests)},indent=2),encoding="utf-8")
-    print("Integrated workspace passed: automatic LEO/MEO/GEO framing, 24-hour navigation playback, retained zoom, scrolling catalog and cache reuse.")
+    print("Integrated workspace passed: PostgreSQL model resolution, textured MinIO GLB, failure preservation, orbit cache reuse and adaptive playback.")
     browser.close()

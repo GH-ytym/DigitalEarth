@@ -138,7 +138,7 @@ export default function App() {
             <div hidden={panel !== 'satellites'}>
               <SatellitePanel active={panel === 'satellites'} ready={!!controller.current && !scene.transitioning}
                 playback={scene.satellitePlayback}
-                onLoad={(manifest, samples) => controller.current?.loadSatellites(manifest, samples)}
+                onLoad={(manifest, samples, models) => controller.current?.loadSatellites(manifest, samples, models)}
                 onFocus={() => controller.current?.focusSatellites()}
                 onClear={() => controller.current?.clearSatellites()} />
             </div>

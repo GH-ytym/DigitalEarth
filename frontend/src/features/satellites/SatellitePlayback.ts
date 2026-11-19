@@ -4,7 +4,7 @@ import {
   SampledPositionProperty, TimeInterval, TimeIntervalCollection, TrackingReferenceFrame, VelocityOrientationProperty,
 } from 'cesium';
 import type { Entity, Viewer } from 'cesium';
-import type { SatelliteManifest, SatellitePlaybackState, SatelliteSamples } from './types';
+import type { SatelliteManifest, SatelliteModel, SatellitePlaybackState, SatelliteSamples } from './types';
 import { subsatellitePosition } from './subsatellitePosition';
 import { earthRadius, orbitFollowRange, orbitViewDistance } from './orbitView';
 import { satellitePlaybackSpeeds } from './types';
@@ -18,6 +18,7 @@ export class SatellitePlayback {
   private orbitRadius = earthRadius;
   private orbitBounds = new Map<string, { min: number; max: number }>();
   private manifest: SatelliteManifest | null = null;
+  private models: SatelliteModel[] = [];
   private epoch = new JulianDate();
   private lastUpdate = 0;
   private following: string | null = null;
@@ -31,12 +32,18 @@ export class SatellitePlayback {
     this.removeTick = viewer.clock.onTick.addEventListener(() => this.tick());
   }
 
-  load(manifest: SatelliteManifest, samples: SatelliteSamples) {
+  load(manifest: SatelliteManifest, samples: SatelliteSamples, models: SatelliteModel[]) {
+    const byNorad = new Map(models.map(model => [model.norad_id, model]));
+    if (byNorad.size !== manifest.satellites.length || manifest.satellites.some(sat => !byNorad.has(sat.norad_id))) {
+      throw new Error('卫星模型配置不完整，当前场景已保留。');
+    }
     this.clear(false);
     this.manifest = manifest;
+    this.models = models;
     this.epoch = JulianDate.fromIso8601(manifest.epoch_utc);
     samples.satellites.forEach((track, index) => {
       const spec = manifest.satellites.find(sat => sat.satellite_id === track.satellite_id)!;
+      const model = byNorad.get(spec.norad_id)!;
       const color = Color.fromCssColorString(colors[index]);
       const position = new SampledPositionProperty(ReferenceFrame.FIXED);
       position.addSamplesPackedArray(track.samples.flat(), this.epoch);
@@ -62,7 +69,8 @@ export class SatellitePlayback {
         trackingReferenceFrame: TrackingReferenceFrame.ENU,
         viewFrom: this.followOffset(bounds),
         orientation: new VelocityOrientationProperty(position),
-        model: { uri: './models/satellite.glb', minimumPixelSize: 30, maximumScale: 80000 },
+        model: { uri: model.model_url, scale: model.render_options.scale,
+          minimumPixelSize: model.render_options.minimum_pixel_size, maximumScale: model.render_options.maximum_scale },
         point: { pixelSize: 6, color },
         label: { text: spec.object_name, font: '13px sans-serif', fillColor: color,
           outlineColor: Color.fromCssColorString('#06162e'), outlineWidth: 3,
@@ -101,7 +109,7 @@ export class SatellitePlayback {
       clock.shouldAnimate = false;
       this.viewer.scene.maximumRenderTimeChange = Infinity;
     }
-    this.onChange({ manifest: this.manifest, elapsed, currentUtc: JulianDate.toIso8601(clock.currentTime, 0),
+    this.onChange({ manifest: this.manifest, models: this.models, elapsed, currentUtc: JulianDate.toIso8601(clock.currentTime, 0),
       playing: clock.shouldAnimate, speed: clock.multiplier, following: this.following,
       positions: this.entities.flatMap(entity => {
         const p = entity.position?.getValue(clock.currentTime);
@@ -186,6 +194,7 @@ export class SatellitePlayback {
     this.orbitRadius = earthRadius;
     this.orbitBounds.clear();
     this.manifest = null;
+    this.models = [];
     this.viewer.scene.requestRender();
     if (notify) this.onChange(null);
   }

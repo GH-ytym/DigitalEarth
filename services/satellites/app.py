@@ -11,6 +11,7 @@ from config import ROOT, Settings
 from dll_adapter import OrbitLibrary
 from service import BusyError, SatelliteService
 from storage import Store
+from model_store import ModelRegistry
 
 class TrackRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -22,6 +23,16 @@ class TrackRequest(BaseModel):
             raise ValueError("请选择目录中不重复的卫星编号。")
         return self
 
+class ModelResolveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    norad_ids: list[int] = Field(min_length=1, max_length=MAX_SELECTED)
+
+    @model_validator(mode="after")
+    def valid_ids(self):
+        if len(set(self.norad_ids)) != len(self.norad_ids) or any(not 0 < norad <= 999999999 for norad in self.norad_ids):
+            raise ValueError("请提供不重复的有效卫星编号。")
+        return self
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = Settings()
@@ -31,6 +42,10 @@ async def lifespan(app: FastAPI):
     store.initialize()
     catalog = PublicCatalog(store)
     catalog.initialize()
+    models = ModelRegistry(store)
+    models.initialize()
+    models.bootstrap()
+    app.state.models = models
     app.state.service = SatelliteService(store, catalog, OrbitLibrary(ROOT / "build/satellites.dll"))
     try:
         yield
@@ -39,6 +54,42 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="DigitalEarth public satellite API", lifespan=lifespan)
 PREFIX = "/api/v1/satellites"
+
+@app.post(PREFIX + "/models/resolve")
+def resolve_models(body: ModelResolveRequest, request: Request, response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return dict(models=request.app.state.models.resolve(body.norad_ids))
+    except ValueError as exc:
+        raise HTTPException(503, "尚未配置可用的卫星模型，请先导入模型。") from exc
+
+@app.get(PREFIX + "/models")
+def models(request: Request, response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    return dict(assets=request.app.state.models.list_assets())
+
+@app.get(PREFIX + "/models/versions/{version_id}/model.glb")
+def model_file(version_id: UUID, request: Request):
+    registry = request.app.state.models
+    version = registry.get_version(str(version_id))
+    if not version:
+        raise HTTPException(404, "模型版本不存在。")
+    etag = f'"{version_id}"'
+    headers = {"ETag":etag, "Cache-Control":"private, max-age=31536000, immutable"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    try:
+        source = registry.store.objects.get_object(registry.bucket,version["object_key"])
+    except S3Error as exc:
+        raise HTTPException(503, "模型文件暂不可用，请检查模型存储。") from exc
+    def chunks():
+        try:
+            yield from source.stream(64*1024)
+        finally:
+            source.close()
+            source.release_conn()
+    headers["Content-Length"] = str(version["byte_length"])
+    return StreamingResponse(chunks(), media_type="model/gltf-binary", headers=headers)
 
 @app.get(PREFIX + "/health")
 def health(request: Request):
