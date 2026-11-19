@@ -1,4 +1,5 @@
 import type { SatellitePlaybackState } from './types';
+import { satellitePlaybackSpeeds } from './types';
 import { satelliteTime } from './SatellitePanel';
 
 interface Props {
@@ -16,7 +17,7 @@ export function SatelliteControls({ state, onPlay, onSeek, onSpeed, onFollow, on
         <button onClick={() => onPlay(!state.playing)}>{state.playing ? '暂停' : '播放'}</button>
         <button onClick={() => onSeek(0)}>回到起点</button>
         <label>倍速<select aria-label="卫星回放倍速" value={state.speed} onChange={event => onSpeed(Number(event.target.value))}>
-          {[1, 30, 60, 120, 300].map(value => <option value={value} key={value}>{value}×</option>)}
+          {satellitePlaybackSpeeds.map(value => <option value={value} key={value}>{value}×</option>)}
         </select></label>
         <label>跟随<select aria-label="跟随卫星" value={state.following ?? ''} onChange={event => onFollow(event.target.value || null)}>
           <option value="">自由视角</option>{state.manifest.satellites.map(sat => <option value={sat.satellite_id} key={sat.satellite_id}>{sat.object_name}</option>)}

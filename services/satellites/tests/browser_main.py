@@ -88,6 +88,8 @@ with sync_playwright() as playwright:
       const load = SceneController.prototype.loadSatellites;
       SceneController.prototype.loadSatellites = function(...args) {
         window.__testViewer = this.viewer;
+        window.__testManifest = args[0];
+        window.__testSamples = args[1];
         return load.apply(this, args);
       };
     }""")
@@ -213,6 +215,52 @@ with sync_playwright() as playwright:
     page.get_by_role("button",name="查看全部轨迹",exact=True).click()
     page.wait_for_timeout(1200)
     page.screenshot(path=str(OUT / "integrated-desktop.png"))
+    # Each orbital scale must be framed automatically, without a manual zoom-out.
+    for label, ids, duration, step, target in (
+        ("meo", [36585,37846,43001],86400,30,36585),
+        ("geo", [48808],7200,10,48808),
+        ("mixed", [25544,36585],86400,10,36585),
+    ):
+        page.get_by_role("button", name="清空卫星选择", exact=True).click()
+        for norad in ids:
+            checkbox(norad).check()
+        load.click()
+        expect(load).to_be_enabled(timeout=60000)
+        page.wait_for_function("""ids => window.__testManifest.satellites.map(s=>s.norad_id).sort().join(',') === [...ids].sort().join(',')""", arg=ids)
+        page.wait_for_timeout(1400)
+        framing = page.evaluate("""() => {
+          const v = window.__testViewer;
+          let outside = 0;
+          for (const e of v.dataSources.getByName('public-satellites')[0].entities.values) {
+            if (!e.polyline) continue;
+            for (const p of e.polyline.positions.getValue(v.clock.currentTime)) {
+              const s = v.scene.cartesianToCanvasCoordinates(p);
+              if (!s || s.x<0 || s.y<0 || s.x>v.scene.canvas.clientWidth || s.y>v.scene.canvas.clientHeight) outside++;
+            }
+          }
+          return {outside, height:v.camera.positionCartographic.height,
+            duration:window.__testManifest.duration_s,step:window.__testManifest.output_step_s};
+        }""")
+        assert framing["outside"] == 0, (label, framing)
+        assert framing["height"] > 50000000, (label, framing)
+        assert framing["duration"] == duration and framing["step"] == step, framing
+        expect(page.get_by_label("卫星回放倍速")).to_have_value("600" if duration>7200 else "60")
+        page.screenshot(path=str(OUT / f"adaptive-{label}-overview.png"))
+        controls.get_by_role("button", name="暂停", exact=True).click()
+        page.get_by_label("跟随卫星", exact=True).select_option(f"norad-{target}")
+        page.wait_for_timeout(400)
+        tracked = tracking_snapshot(page)
+        assert tracked["distance"] > 40000000, (label, tracked)
+        assert_overview(tracked, f"norad-{target}", tracked["distance"])
+        page.screenshot(path=str(OUT / f"adaptive-{label}-follow.png"))
+        page.get_by_role("button", name="缩小", exact=True).click()
+        page.wait_for_timeout(200)
+        tracked_zoom = tracking_snapshot(page)
+        slider.click(position={"x":bounds["width"]*.35,"y":bounds["height"]/2})
+        page.wait_for_timeout(200)
+        assert_overview(tracking_snapshot(page), f"norad-{target}", tracked_zoom["distance"])
+        page.get_by_role("button", name="查看全部轨迹", exact=True).click()
+        page.wait_for_timeout(1000)
     # Restoring a persisted result after a full page reload reconstructs the same scene.
     page.reload(wait_until="domcontentloaded")
     expect(page.locator(".satellite-history button").first).to_be_visible(timeout=60000)
@@ -221,6 +269,8 @@ with sync_playwright() as playwright:
     expect(controls).to_have_count(0)
     toggle.click()
     expect(controls).to_be_visible()
+    restored_count = page.get_by_label("跟随卫星", exact=True).locator("option").count() - 1
+    assert 1 <= restored_count <= 3
     expect(load).to_be_enabled()
     expect(page.locator(".satellite-message").filter(has_text="已加载保存的轨迹")).to_be_visible()
     expect(page.locator(".scene-status")).to_have_text("场景就绪", timeout=60000)
@@ -241,12 +291,12 @@ with sync_playwright() as playwright:
     assert credits_bounds["x"] + credits_bounds["width"] < map_bounds["x"]
     toggle.click()
     expect(controls).to_have_count(0)
-    expect(page.locator(".satellite-position")).to_have_count(3)
+    expect(page.locator(".satellite-position")).to_have_count(restored_count)
     assert not errors, errors
     page.get_by_role("button",name="卸载轨迹",exact=True).click()
     expect(page.get_by_role("region",name="卫星轨迹回放",exact=True)).to_have_count(0)
     expect(toggle).to_be_disabled()
     expect(page.locator(".cesium-widget canvas")).to_have_count(1)
     (OUT / "browser-result.json").write_text(json.dumps({"page_errors":errors,"satellite_api_requests":len(requests)},indent=2),encoding="utf-8")
-    print("Integrated workspace passed: 10-entry scrolling catalog, search/categories, three-selection limit, Earth overview tracking and cache reuse.")
+    print("Integrated workspace passed: automatic LEO/MEO/GEO framing, 24-hour navigation playback, retained zoom, scrolling catalog and cache reuse.")
     browser.close()

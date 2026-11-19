@@ -1,3 +1,5 @@
+export const satellitePlaybackSpeeds = [1, 30, 60, 120, 300, 600, 1200, 3600] as const;
+
 export interface SatelliteEntry {
   norad_id: number;
   display_name: string;

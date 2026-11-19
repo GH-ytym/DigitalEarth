@@ -119,6 +119,7 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
     {playback && <>
       <div className="satellite-result-info">
         <p>回放起点：{satelliteTime(playback.manifest.epoch_utc)}</p>
+        <p>回放时长：{playback.manifest.duration_s / 3600} 小时</p>
         {playback.manifest.window_kind === 'historical' && <p>当前使用较旧要素对应的历史时段。</p>}
       </div>
       <div className="satellite-actions"><button className="text-button" onClick={onFocus}>查看全部轨迹</button><button className="text-button" onClick={onClear}>卸载轨迹</button></div>

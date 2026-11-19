@@ -6,6 +6,8 @@ import {
 import type { Entity, Viewer } from 'cesium';
 import type { SatelliteManifest, SatellitePlaybackState, SatelliteSamples } from './types';
 import { subsatellitePosition } from './subsatellitePosition';
+import { earthRadius, orbitFollowRange, orbitViewDistance } from './orbitView';
+import { satellitePlaybackSpeeds } from './types';
 
 const colors = ['#80D9FA', '#FFBD7B', '#C5B1FF'];
 
@@ -13,6 +15,8 @@ const colors = ['#80D9FA', '#FFBD7B', '#C5B1FF'];
 export class SatellitePlayback {
   private source = new CustomDataSource('public-satellites');
   private entities: Entity[] = [];
+  private orbitRadius = earthRadius;
+  private orbitBounds = new Map<string, { min: number; max: number }>();
   private manifest: SatelliteManifest | null = null;
   private epoch = new JulianDate();
   private lastUpdate = 0;
@@ -37,6 +41,14 @@ export class SatellitePlayback {
       const position = new SampledPositionProperty(ReferenceFrame.FIXED);
       position.addSamplesPackedArray(track.samples.flat(), this.epoch);
       position.setInterpolationOptions({ interpolationAlgorithm: LinearApproximation, interpolationDegree: 1 });
+      const bounds = { min: Infinity, max: 0 };
+      for (const [, x, y, z] of track.samples) {
+        const radius = Math.hypot(x, y, z);
+        bounds.min = Math.min(bounds.min, radius);
+        bounds.max = Math.max(bounds.max, radius);
+      }
+      this.orbitBounds.set(track.satellite_id, bounds);
+      this.orbitRadius = Math.max(this.orbitRadius, bounds.max);
       const availability = new TimeIntervalCollection([new TimeInterval({
         start: this.epoch, stop: JulianDate.fromIso8601(manifest.stop_utc),
       })]);
@@ -48,7 +60,7 @@ export class SatellitePlayback {
         availability,
         // Keep a north-up Earth overview; only the view centre follows the satellite.
         trackingReferenceFrame: TrackingReferenceFrame.ENU,
-        viewFrom: new Cartesian3(0, 0, 16_000_000),
+        viewFrom: this.followOffset(bounds),
         orientation: new VelocityOrientationProperty(position),
         model: { uri: './models/satellite.glb', minimumPixelSize: 30, maximumScale: 80000 },
         point: { pixelSize: 6, color },
@@ -73,7 +85,7 @@ export class SatellitePlayback {
     clock.stopTime = JulianDate.fromIso8601(manifest.stop_utc);
     clock.clockStep = ClockStep.SYSTEM_CLOCK_MULTIPLIER;
     clock.clockRange = ClockRange.CLAMPED;
-    clock.multiplier = 60;
+    clock.multiplier = manifest.duration_s > 7200 ? 600 : 60;
     clock.canAnimate = true;
     this.focus();
     this.play(true);
@@ -119,13 +131,19 @@ export class SatellitePlayback {
     this.tick(true);
   }
   speed(value: number) {
-    if (![1, 30, 60, 120, 300].includes(value)) return;
+    if (!satellitePlaybackSpeeds.some(speed => speed === value)) return;
     this.viewer.clock.multiplier = value;
     this.tick(true);
   }
   follow(id: string | null) {
     const entity = this.entities.find(entity => entity.id === id);
-    if (entity) this.viewer.camera.cancelFlight();
+    if (entity) {
+      this.viewer.camera.cancelFlight();
+      const bounds = this.orbitBounds.get(entity.id)!;
+      const offset = this.followOffset(bounds);
+      entity.viewFrom = offset;
+      this.allowCameraDistance(bounds.max + offset.z);
+    }
     this.following = entity?.id ?? null;
     this.viewer.trackedEntity = entity;
     this.viewer.scene.requestRender();
@@ -133,8 +151,30 @@ export class SatellitePlayback {
   }
   focus() {
     this.follow(null);
-    this.viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(105, 20, 23000000),
+    const distance = this.viewDistance(this.orbitRadius);
+    this.allowCameraDistance(distance);
+    this.viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(105, 20, Math.max(23_000_000, distance - earthRadius)),
       orientation: { heading: 0, pitch: -CesiumMath.PI_OVER_TWO, roll: 0 }, duration: 0.8 });
+  }
+  private viewAngles() {
+    const scene = this.viewer.scene;
+    const aspect = Math.max(1, scene.canvas.clientWidth) / Math.max(1, scene.canvas.clientHeight);
+    const frustum = this.viewer.camera.frustum;
+    return { aspect, vertical: ('fovy' in frustum ? frustum.fovy : undefined) ?? CesiumMath.PI_OVER_THREE };
+  }
+  private viewDistance(radius: number) {
+    const { vertical, aspect } = this.viewAngles();
+    return orbitViewDistance(radius, vertical, aspect);
+  }
+  private followOffset(bounds: { min: number; max: number }) {
+    const { vertical, aspect } = this.viewAngles();
+    return new Cartesian3(0, 0, orbitFollowRange(bounds.max, bounds.min, vertical, aspect));
+  }
+  private allowCameraDistance(distance: number) {
+    const controls = this.viewer.scene.screenSpaceCameraController;
+    controls.maximumZoomDistance = Math.max(controls.maximumZoomDistance, distance * 2);
+    const frustum = this.viewer.camera.frustum;
+    frustum.far = Math.max(frustum.far, distance * 3);
   }
   clear(notify = true) {
     this.viewer.clock.shouldAnimate = false;
@@ -143,6 +183,8 @@ export class SatellitePlayback {
     this.following = null;
     this.source.entities.removeAll();
     this.entities = [];
+    this.orbitRadius = earthRadius;
+    this.orbitBounds.clear();
     this.manifest = null;
     this.viewer.scene.requestRender();
     if (notify) this.onChange(null);

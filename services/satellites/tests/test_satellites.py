@@ -153,7 +153,9 @@ class PipelineTests(unittest.TestCase):
 
     def test_navigation_and_geostationary_full_tracks(self):
         with TestClient(app) as client:
-            for ids in ([36585,37846,43001], [48808,25994,49260]):
+            cases = [([36585,37846,43001],86400,30), ([48808,25994,49260],7200,10),
+                     ([25544,36585],86400,10), ([48808,37846],86400,30)]
+            for ids, duration, step in cases:
                 job = client.post("/api/v1/satellites/tracks", json={"norad_ids":ids}).json()
                 deadline = time.monotonic() + 20
                 while job["status"] in {"queued", "running"}:
@@ -164,7 +166,15 @@ class PipelineTests(unittest.TestCase):
                 manifest = client.get(job["result_url"]).json()
                 data = client.get(manifest["samples_url"]).json()
                 self.assertEqual({sat["norad_id"] for sat in manifest["satellites"]}, set(ids))
-                self.assertTrue(all(len(track["samples"]) == 721 for track in data["satellites"]))
+                self.assertEqual(manifest["duration_s"], duration)
+                self.assertEqual(manifest["output_step_s"], step)
+                self.assertEqual((utc(manifest["stop_utc"])-utc(manifest["epoch_utc"])).total_seconds(), duration)
+                self.assertTrue(all(len(track["samples"]) == duration//step+1 for track in data["satellites"]))
+                self.assertTrue(all(track["samples"][-1][0] == duration for track in data["satellites"]))
+                repeated = client.post("/api/v1/satellites/tracks", json={"norad_ids":ids})
+                self.assertEqual(repeated.status_code, 200)
+                self.assertTrue(repeated.json()["cache_hit"])
+                self.assertEqual(repeated.json()["result_id"], job["result_id"])
                 for track in data["satellites"]:
                     radius = math.hypot(*track["samples"][0][1:])
                     if track["satellite_id"] == "norad-48808":

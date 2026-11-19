@@ -5,7 +5,7 @@ import json
 import logging
 from threading import Lock
 
-from catalog import SATELLITES
+from catalog import SATELLITES, SPECIFICATIONS
 from dll_adapter import ENGINE_VERSION, FRAME_VERSION, utc
 
 logger = logging.getLogger(__name__)
@@ -30,8 +30,13 @@ class SatelliteService:
         if historic:
             # Old snapshots remain usable as clearly dated historical replay, not 'live'.
             start = max(utc(row["record"]["EPOCH"]) for row in rows).replace(minute=0, second=0, microsecond=0)
+        orbits = [SPECIFICATIONS[row["norad_id"]]["orbit_type"] for row in rows]
+        has_medium_orbit = "MEO" in orbits
+        duration = 86400 if has_medium_orbit else 7200
+        # A mixed replay shares one clock; keep the fastest satellite's sampling resolution.
+        step = 30 if has_medium_orbit and "LEO" not in orbits else 10
         return dict(norad_ids=sorted(ids), epoch_utc=start.isoformat().replace("+00:00", "Z"),
-            duration_s=7200, output_step_s=10, window_kind="historical" if historic else "current-window",
+            duration_s=duration, output_step_s=step, window_kind="historical" if historic else "current-window",
             elements=[dict(norad_id=row["norad_id"], record=row["record"], fingerprint=row["fingerprint"],
                 source_url=row["source_url"], fetched_at=row["fetched_at"].isoformat()) for row in rows])
 
@@ -64,7 +69,8 @@ class SatelliteService:
                 record, norad = entry["record"], entry["norad_id"]
                 with self.lock:
                     self.native_calls += 1
-                points = self.native.propagate(record, utc(request["epoch_utc"]))
+                points = self.native.propagate(record, utc(request["epoch_utc"]),
+                    duration=request["duration_s"], step=request["output_step_s"])
                 satellite_id = f"norad-{norad}"
                 samples.append(dict(satellite_id=satellite_id, samples=points))
                 satellites.append(dict(satellite_id=satellite_id, norad_id=norad,
@@ -74,8 +80,8 @@ class SatelliteService:
                     source_url=entry["source_url"], elements=record))
             start = utc(request["epoch_utc"])
             manifest = dict(schema_version="satellites-1", result_id=row["result_id"],
-                epoch_utc=request["epoch_utc"], stop_utc=(start+timedelta(seconds=7200)).isoformat(),
-                duration_s=7200, output_step_s=10, position_frame="ECEF_APPROX", position_unit="m",
+                epoch_utc=request["epoch_utc"], stop_utc=(start+timedelta(seconds=request["duration_s"])).isoformat(),
+                duration_s=request["duration_s"], output_step_s=request["output_step_s"], position_frame="ECEF_APPROX", position_unit="m",
                 columns=["dt_s", "x_m", "y_m", "z_m"], satellites=satellites,
                 window_kind=request["window_kind"], provider="CelesTrak", propagation="C++ SGP4 (WGS72)",
                 engine_version=ENGINE_VERSION, dll_fingerprint=self.native.fingerprint, frame_version=FRAME_VERSION,
