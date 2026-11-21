@@ -10,17 +10,22 @@ import { initialSnapshot } from './features/globe/types';
 import type { MapLayerStatus, SceneSnapshot, TerrainStatus } from './features/globe/types';
 import { QueryPanel } from './features/locations/QueryPanel';
 import { placeCameraHeight, placeHierarchy, placeKindLabel } from './features/locations/types';
+import { AnnotationPanel } from './features/mapWorkspace/AnnotationPanel';
+import { MeasurementPanel } from './features/mapWorkspace/MeasurementPanel';
+import { useMapWorkspace } from './features/mapWorkspace/useMapWorkspace';
 import { SatellitePanel } from './features/satellites/SatellitePanel';
 import { SatelliteControls } from './features/satellites/SatelliteControls';
+import './features/mapWorkspace/mapWorkspace.css';
 import './features/satellites/satellites.css';
 
-type Panel = 'layers' | 'query' | 'satellites';
+type Panel = 'layers' | 'annotations' | 'measurements' | 'query' | 'satellites';
 const navigation: Array<{ id: Panel; label: string; icon: IconName }> = [
   { id: 'layers', label: '图层管理', icon: 'layers' },
+  { id: 'measurements', label: '距离测量', icon: 'ruler' },
+  { id: 'annotations', label: '地图标注', icon: 'pen' },
   { id: 'query', label: '查询索引', icon: 'locate' },
   { id: 'satellites', label: '卫星轨迹', icon: 'orbit' },
 ];
-const panelTitles = { layers: '图层管理', query: '查询索引', satellites: '卫星轨迹' };
 const terrainLabels: Record<TerrainStatus, string> = {
   unconfigured: '未配置',
   disabled: '已关闭',
@@ -49,6 +54,7 @@ function surfaceHeight(height: number | null) {
 
 export default function App() {
   const controller = useRef<SceneController | null>(null);
+  const [readyController, setReadyController] = useState<SceneController | null>(null);
   const [scene, setScene] = useState<SceneSnapshot>(initialSnapshot);
   const [panel, setPanel] = useState<Panel | null>(() => new URLSearchParams(window.location.search).get('panel') === 'satellites' ? 'satellites' : 'query');
   const [grid, setGrid] = useState(false);
@@ -59,6 +65,7 @@ export default function App() {
   const timelineButton = useRef<HTMLButtonElement>(null);
   const onReady = useCallback((value: SceneController | null) => {
     controller.current = value;
+    setReadyController(value);
   }, []);
   const onSnapshot = useCallback((value: SceneSnapshot) => setScene(value), []);
   const onError = useCallback(
@@ -69,9 +76,15 @@ export default function App() {
   const terrainActive = scene.terrainStatus === 'ready';
   const terrainBusy = scene.terrainStatus === 'loading';
   const terrainName = terrainActive ? '全球高程地形' : 'WGS84 椭球面';
+  const workspaceTool = panel === 'annotations' || panel === 'measurements' ? panel : null;
+  const canPick = !!readyController && !scene.transitioning;
+  const workspace = useMapWorkspace(readyController, workspaceTool, canPick);
+  const currentPanel = navigation.find(item => item.id === panel);
+  const pickedPlace = scene.selection?.place;
 
   function togglePanel(value: Panel) {
     setPanel((current) => (current === value ? null : value));
+    if (value === 'annotations' || value === 'measurements') setLayerPropertiesOpen(false);
   }
 
   function closeLayerProperties() {
@@ -124,17 +137,19 @@ export default function App() {
           </h1>
         </div>
 
-        <aside className={`floating-panel main-panel ${panel === 'query' ? 'query-panel' : ''} ${panel === 'satellites' ? 'satellites-panel' : ''}`} hidden={!panel} aria-label={panelTitles[panel ?? 'layers']}>
+        <aside className={`floating-panel main-panel ${panel === 'query' ? 'query-panel' : ''} ${panel === 'satellites' ? 'satellites-panel' : ''} ${workspaceTool ? 'map-tools-panel' : ''}`} hidden={!panel} aria-label={currentPanel?.label}>
           <div className="panel-header">
             <div>
-              <Icon name={panel === 'layers' ? 'layers' : panel === 'satellites' ? 'orbit' : 'locate'} size={18} />
-              <h2>{panelTitles[panel ?? 'layers']}</h2>
+              {currentPanel && <><Icon name={currentPanel.icon} size={18} /><h2>{currentPanel.label}</h2></>}
             </div>
             <button className="icon-button" aria-label="收起面板" onClick={() => setPanel(null)}>
               <Icon name="close" size={16} />
             </button>
           </div>
           <div className="panel-content">
+            {workspaceTool === 'annotations' && <AnnotationPanel workspace={workspace} canPick={canPick}
+              onMeasure={() => setPanel('measurements')} />}
+            {workspaceTool === 'measurements' && <MeasurementPanel workspace={workspace} canPick={canPick} />}
             <div hidden={panel !== 'satellites'}>
               <SatellitePanel active={panel === 'satellites'} ready={!!controller.current && !scene.transitioning}
                 playback={scene.satellitePlayback}
@@ -245,6 +260,12 @@ export default function App() {
                 <div className="panel-divider" />
                 <h3 className="section-title">辅助图层</h3>
                 <label className="toggle-row">
+                  <span><Icon name="pin" size={17} />地名注记</span>
+                  <input type="checkbox" role="switch" checked={workspace.labelsVisible}
+                    onChange={event => workspace.setLabelsVisible(event.target.checked)} />
+                  <span className="switch-track" />
+                </label>
+                <label className="toggle-row">
                   <span>
                     <Icon name="grid" size={17} />
                     网格辅助线
@@ -274,6 +295,18 @@ export default function App() {
                   setInspectorOpen(true);
                 }}
               />
+              {pickedPlace && <button className="map-workspace-button map-save-place" type="button"
+                disabled={workspace.status.busy} onClick={() => {
+                  const started = workspace.annotation.start({
+                    longitude: pickedPlace.longitude,
+                    latitude: pickedPlace.latitude,
+                    name: pickedPlace.name,
+                    source_geoname_id: String(pickedPlace.geoname_id),
+                  });
+                  if (started) setPanel('annotations');
+                }}>
+                <Icon name="pen" size={15} />将「{pickedPlace.name}」添加为标注
+              </button>}
             </div>
           </div>
           <div className="panel-footer">
@@ -302,7 +335,7 @@ export default function App() {
           />
         )}
 
-        {inspectorOpen && !layerPropertiesOpen && panel !== 'satellites' && (
+        {inspectorOpen && !layerPropertiesOpen && panel !== 'satellites' && !workspaceTool && (
           <aside className="floating-panel inspector" aria-label="场景信息">
             <div className="panel-header">
               <div>

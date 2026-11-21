@@ -65,6 +65,33 @@ const paths = {
       <circle cx="12" cy="9" r="2" />
     </>
   ),
+  pen: (
+    <>
+      <path d="M14 5 19 10M4 20l1.2-5.7L16.9 2.6l4.5 4.5L9.7 18.8 4 20Z" />
+      <path d="M5.2 14.3l4.5 4.5M12 20h8" />
+    </>
+  ),
+  ruler: (
+    <>
+      <path d="M2.8 14.7 14.7 2.8l6.5 6.5L9.3 21.2 2.8 14.7Z" />
+      <path d="m7 10.5 2 2m1.4-5.4 2 2m1.4-5.4 2 2" />
+    </>
+  ),
+  polyline: (
+    <>
+      <path d="m5.4 15.5 5.1-6m3.3 1.2 5 3.9" />
+      <circle cx="4" cy="17" r="2" />
+      <circle cx="12" cy="8" r="2" />
+      <circle cx="20" cy="16" r="2" />
+    </>
+  ),
+  straightLine: (
+    <>
+      <path d="M5.6 16.8 18.4 7.2" />
+      <circle cx="4" cy="18" r="2" />
+      <circle cx="20" cy="6" r="2" />
+    </>
+  ),
   orbit: (
     <>
       <circle cx="12" cy="12" r="4" />
