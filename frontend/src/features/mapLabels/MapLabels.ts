@@ -9,17 +9,16 @@ import type { LabelScale } from './referenceLabels';
 type Coordinates = { longitude: number; latitude: number };
 type CityVertex = Coordinates & { name: string; source_geoname_id: string };
 type ScreenBounds = { left: number; right: number; top: number; bottom: number };
+type SurfacePoint = { position: Cartesian3; normal: Cartesian3 };
 type LabelEntry = {
   label: Label;
   marker?: Label;
   vertex?: CityVertex;
   maxCameraHeight: number;
-  position: Cartesian3;
-  normal: Cartesian3;
   screen: Cartesian2;
   width: number;
   bounds: ScreenBounds;
-};
+} & SurfacePoint;
 
 const scaleMaxHeight: Record<LabelScale, number> = {
   global: Number.POSITIVE_INFINITY,
@@ -48,7 +47,7 @@ export class MapLabels {
   private readonly removeRenderListener: () => void;
   private readonly directionToCamera = new Cartesian3();
   private readonly priorityScreen = new Cartesian2();
-  private priorityPositions: Cartesian3[] = [];
+  private priorityPositions: SurfacePoint[] = [];
 
   constructor(private readonly viewer: Viewer) {
     const scene = viewer.scene;
@@ -85,9 +84,10 @@ export class MapLabels {
 
   setPriorityPoints(points: readonly Coordinates[]) {
     const ellipsoid = this.viewer.scene.globe.ellipsoid;
-    this.priorityPositions = points.map(point =>
-      Cartesian3.fromDegrees(point.longitude, point.latitude, 0, ellipsoid),
-    );
+    this.priorityPositions = points.map(point => {
+      const position = Cartesian3.fromDegrees(point.longitude, point.latitude, 0, ellipsoid);
+      return { position, normal: ellipsoid.geodeticSurfaceNormal(position) };
+    });
     this.viewer.scene.requestRender();
   }
 
@@ -177,7 +177,8 @@ export class MapLabels {
     const is3D = scene.mode === SceneMode.SCENE3D;
     const occupied: ScreenBounds[] = [];
     for (const point of this.priorityPositions) {
-      const screen = scene.cartesianToCanvasCoordinates(point, this.priorityScreen);
+      if (is3D && !this.facingCamera(cameraPosition, point)) continue;
+      const screen = scene.cartesianToCanvasCoordinates(point.position, this.priorityScreen);
       if (!screen) continue;
       if (screen.x < -110 || screen.x > clientWidth + 16 ||
         screen.y < -28 || screen.y > clientHeight + 28) continue;
@@ -210,8 +211,8 @@ export class MapLabels {
     }
   }
 
-  private facingCamera(cameraPosition: Cartesian3, entry: LabelEntry) {
-    Cartesian3.subtract(cameraPosition, entry.position, this.directionToCamera);
-    return Cartesian3.dot(entry.normal, this.directionToCamera) > 0;
+  private facingCamera(cameraPosition: Cartesian3, point: SurfacePoint) {
+    Cartesian3.subtract(cameraPosition, point.position, this.directionToCamera);
+    return Cartesian3.dot(point.normal, this.directionToCamera) > 0;
   }
 }
