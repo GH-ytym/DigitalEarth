@@ -26,6 +26,10 @@ import { sceneConfig } from '../../config/scene';
 import { provinceBoundary } from '../../config/mapServices';
 import { SatellitePlayback } from '../satellites/SatellitePlayback';
 import type { SatelliteManifest, SatelliteModel, SatelliteSamples } from '../satellites/types';
+import { MapLabels } from '../mapLabels/MapLabels';
+import { WorkspaceScene } from '../mapWorkspace/WorkspaceScene';
+import { geodesicPath } from '../mapWorkspace/distance';
+import type { WorkspaceInput, WorkspaceOverlay, WorkspaceVertex } from '../mapWorkspace/types';
 import { initialSnapshot } from './types';
 import type { GeoPosition, SelectedPosition, SceneSnapshot, TerrainStatus } from './types';
 import type { PlaceResult } from '../locations/types';
@@ -39,7 +43,11 @@ import type { ProvinceSettings } from '../layers/provinceSettings';
 export class SceneController {
   private readonly viewer: Viewer;
   private readonly satellitePlayback: SatellitePlayback;
+  private readonly workspaceScene: WorkspaceScene;
+  private readonly mapLabels: MapLabels;
   private readonly input: ScreenSpaceEventHandler;
+  private workspaceInput: WorkspaceInput | null = null;
+  private restoreViewerInput?: () => void;
   private readonly disposers: Array<() => void> = [];
   private gridLayer?: ImageryLayer;
   private provinceLayer?: ImageryLayer;
@@ -82,6 +90,8 @@ export class SceneController {
       shouldAnimate: false,
     });
     this.satellitePlayback = new SatellitePlayback(this.viewer, satellitePlayback => this.emit({ satellitePlayback }));
+    this.workspaceScene = new WorkspaceScene(this.viewer);
+    this.mapLabels = new MapLabels(this.viewer);
     const scene = this.viewer.scene;
     scene.backgroundColor = Color.fromCssColorString('#06162e');
     if (scene.skyBox) scene.skyBox.show = false;
@@ -97,19 +107,29 @@ export class SceneController {
       const now = performance.now();
       if (now - this.lastPointerUpdate < 60) return;
       this.lastPointerUpdate = now;
-      this.emit({ pointer: this.pick(endPosition) });
+      const point = this.pick(endPosition);
+      this.emit({ pointer: point });
+      this.workspaceInput?.onHover(point ? this.workspaceVertex(endPosition, point) : null);
     }, ScreenSpaceEventType.MOUSE_MOVE);
     this.input.setInputAction(({ position }: { position: Cartesian2 }) => {
       const point = this.pick(position);
-      if (point) this.select(point);
+      if (!point) return;
+      if (this.workspaceInput) this.workspaceInput.onPick(this.workspaceVertex(position, point));
+      else this.select(point);
     }, ScreenSpaceEventType.LEFT_CLICK);
-    const onLeave = () => this.emit({ pointer: null });
+    const onLeave = () => {
+      this.emit({ pointer: null });
+      this.workspaceInput?.onHover(null);
+    };
     scene.canvas.addEventListener('mouseleave', onLeave);
     this.disposers.push(() => scene.canvas.removeEventListener('mouseleave', onLeave));
     this.disposers.push(this.viewer.camera.changed.addEventListener(() => this.updateCamera()));
     this.disposers.push(this.viewer.camera.moveEnd.addEventListener(() => this.updateCamera()));
     this.disposers.push(
-      scene.morphStart.addEventListener(() => this.emit({ transitioning: true, pointer: null })),
+      scene.morphStart.addEventListener(() => {
+        this.emit({ transitioning: true, pointer: null });
+        this.workspaceInput?.onHover(null);
+      }),
     );
     this.disposers.push(
       scene.morphComplete.addEventListener(() => {
@@ -206,6 +226,70 @@ export class SceneController {
       latitude: CesiumMath.toDegrees(location.latitude),
       height: 0,
     };
+  }
+
+  private workspaceVertex(screen: Cartesian2, point: GeoPosition): WorkspaceVertex {
+    return this.workspaceScene.pickPoint(screen) ?? this.mapLabels.pickVertex(screen) ?? {
+      longitude: point.longitude,
+      latitude: point.latitude,
+    };
+  }
+
+  setWorkspaceInput(input: WorkspaceInput | null) {
+    if (this.disposed) return;
+    const wasActive = this.workspaceInput !== null;
+    this.workspaceInput = input;
+    if (input && !wasActive) {
+      this.satellitePlayback.follow(null);
+      const { screenSpaceEventHandler, scene } = this.viewer;
+      const click = screenSpaceEventHandler.getInputAction(ScreenSpaceEventType.LEFT_CLICK);
+      const doubleClick = screenSpaceEventHandler.getInputAction(ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+      const cursor = scene.canvas.style.cursor;
+      screenSpaceEventHandler.removeInputAction(ScreenSpaceEventType.LEFT_CLICK);
+      screenSpaceEventHandler.removeInputAction(ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+      scene.canvas.style.cursor = 'crosshair';
+      this.restoreViewerInput = () => {
+        if (click) screenSpaceEventHandler.setInputAction(click, ScreenSpaceEventType.LEFT_CLICK);
+        if (doubleClick) screenSpaceEventHandler.setInputAction(doubleClick, ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+        scene.canvas.style.cursor = cursor;
+      };
+    } else if (!input && wasActive) {
+      this.restoreViewerInput?.();
+      this.restoreViewerInput = undefined;
+    }
+  }
+
+  setWorkspaceOverlay(overlay: WorkspaceOverlay) {
+    if (this.disposed) return;
+    const priorityPoints = this.workspaceScene.setOverlay(overlay);
+    if (priorityPoints) this.mapLabels.setPriorityPoints(priorityPoints);
+  }
+
+  focusWorkspacePoints(points: WorkspaceVertex[]) {
+    if (this.disposed || this.snapshot.transitioning || points.length === 0) return;
+    this.satellitePlayback.follow(null);
+    const path = points.length === 1 ? points : points.slice(1).flatMap((point, i) => geodesicPath(points[i], point));
+    const bounds = Rectangle.fromCartographicArray(path.map(point => Cartographic.fromDegrees(point.longitude, point.latitude)));
+    let destination: Cartesian3 | Rectangle;
+    if (points.length === 1) {
+      const center = Rectangle.center(bounds);
+      destination = Cartesian3.fromRadians(center.longitude, center.latitude, 130_000);
+    } else {
+      const padding = Math.max(CesiumMath.toRadians(0.01), Math.max(bounds.width, bounds.height) * 0.15);
+      destination = bounds.width + 2 * padding >= CesiumMath.TWO_PI ? Rectangle.MAX_VALUE : new Rectangle(
+        CesiumMath.negativePiToPi(bounds.west - padding), Math.max(-CesiumMath.PI_OVER_TWO, bounds.south - padding),
+        CesiumMath.negativePiToPi(bounds.east + padding), Math.min(CesiumMath.PI_OVER_TWO, bounds.north + padding),
+      );
+    }
+    this.viewer.camera.flyTo({
+      destination,
+      duration: 1.2,
+      orientation: { heading: 0, pitch: -CesiumMath.PI_OVER_TWO, roll: 0 },
+    });
+  }
+
+  setMapLabelsVisible(visible: boolean) {
+    if (!this.disposed) this.mapLabels.setVisible(visible);
   }
 
   select(position: SelectedPosition) {
@@ -509,6 +593,8 @@ export class SceneController {
     ++this.terrainRequestId;
     this.removeTerrainErrorListener?.();
     this.disposers.forEach((dispose) => dispose());
+    this.mapLabels.destroy();
+    this.workspaceScene.destroy();
     this.satellitePlayback.destroy();
     this.input.destroy();
     this.viewer.destroy();
