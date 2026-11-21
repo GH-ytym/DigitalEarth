@@ -3,7 +3,7 @@ export interface WorkspaceVertex {
   latitude: number;
   name?: string;
   annotation_id?: string;
-  source_geoname_id?: string;
+  source_geoname_id?: number;
 }
 
 interface WorkspaceRecordInput {
@@ -16,7 +16,7 @@ interface WorkspaceRecordInput {
 export interface AnnotationInput extends WorkspaceRecordInput {
   longitude: number;
   latitude: number;
-  source_geoname_id?: string;
+  source_geoname_id?: number;
 }
 
 interface SavedRecord {

@@ -54,6 +54,7 @@ npm run preview
 
 - 图层管理：Cesium ion 全球卫星影像、真实地形状态、中国省级行政区界线 WMS 叠加及网格辅助线。
 - 查询索引：真实 GeoNames 地名搜索、归属层级候选、键盘选择、地图定位，以及独立的坐标定位页签。
+- 地图工具：默认地名注记、点标注、两点直线及多点折线测量，标注和测量成果保存到 PostgreSQL/PostGIS。
 - 卫星轨迹：后端读取 CelesTrak 公开 GP 要素，通过 C++ SGP4 DLL 生成国际空间站、哈勃和 NOAA-20 的轨迹，支持统一时钟回放、结果保存和复用。
 - 地球浏览：缩放、旋转、倾斜、指北、初始视角、全球视角与二维/三维切换。
 - 地表坐标拾取、选中属性与相机高度显示。
@@ -112,6 +113,24 @@ docker compose run --rm gazetteer verify --report /reports/verification.json
 默认读取仓库外 `../data/geonames/20261021` 已有四个文件，原件只读挂载。配置、导入规则、数据边界及维护方式见 [本地地名数据库说明](docs/geonames-local-search.md)，实际验证结果见 [GeoNames 验证记录](docs/geonames-validation.md)。
 
 已初始化并导入后，日常只需 `docker compose up -d --wait db api`，再启动前端开发服务。进入“查询索引 → 地名查询”输入地名；候选第二行显示标准名称、一级行政区和国家，点击后定位。输入至少两个有效字符，支持精确与前缀匹配。前端开发和生产预览均通过相对路径 `/api` 转发到本机 API。
+
+## 地图标注与距离测量
+
+左侧笔图标用于新建标注，可用地图点选、经纬度或地名查询结果。尺图标提供直线和折线。直线取两点，折线逐点追加并点击“完成测量”，两种方式均可预览后保存。已保存标注可作为测量起点。地名注记默认开启，可在图层管理中切换；可见的城市点可吸附，海域文字用于地图参考。
+
+测量按 WGS84 椭球的最短测地线逐段计算，地形仅用于地图绘制。数据库保存有序顶点、点名和坐标快照、未舍入的分段和总米数。标注修改后仍可复现原测量。应用打开时从成果库读取已保存记录，绘制草稿保留在当前页面。
+
+本机首次初始化或更新部署时，在仓库根目录运行：
+
+```powershell
+.\infra\Initialize-LocalDatabase.ps1
+docker compose up -d --wait db
+docker compose build workspace-setup
+docker compose run --rm --no-deps workspace-setup
+docker compose up -d --no-deps --wait api
+```
+
+成果库 `digitalearth_workspace` 和 GeoNames 库共用 PostgreSQL 容器。初始化单独启用 PostGIS、应用迁移并配置成果读写角色。Go API 通过 `/api/v1/map-workspace` 提供本机默认工作区的成果读写；GeoNames 查询继续使用只读账号。备份和恢复用户成果以 `digitalearth_workspace` 为单位。
 
 ## 公开卫星轨迹
 

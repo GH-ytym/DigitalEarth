@@ -13,7 +13,7 @@ export interface AnnotationDraft {
   note: string;
   longitude: string;
   latitude: string;
-  source_geoname_id?: string;
+  source_geoname_id?: number;
   visible: boolean;
 }
 

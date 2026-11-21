@@ -24,9 +24,12 @@ async function workspaceRequest<T>(path: string, method: 'GET' | 'POST' | 'PATCH
     if (response.status === 204) return undefined as T;
     return response.json().catch(() => { throw new Error('成果服务返回的数据格式异常。'); });
   }
-  if (response.status === 400 || response.status === 422) throw new Error('请检查名称、坐标和测量点后重试。');
-  if (response.status === 404) throw new Error('成果记录或服务入口不存在，请刷新后重试。');
-  if (response.status === 409) throw new Error('成果记录已变更，请刷新列表后重试。');
+  if ([400, 404, 409, 413, 415, 422].includes(response.status)) {
+    const payload = await response.json().catch(() => null);
+    if (typeof payload?.error?.message === 'string') throw new Error(payload.error.message);
+    throw new Error('请检查成果内容或刷新列表后重试。');
+  }
+  if (response.status === 504) throw new Error('成果服务请求超时，请重试。');
   throw new Error('成果服务暂不可用，请稍后重试。');
 }
 

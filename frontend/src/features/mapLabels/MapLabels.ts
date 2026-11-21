@@ -7,7 +7,7 @@ import { cityLabels, marineLabels, sourceCreditHtml } from './referenceLabels';
 import type { LabelScale } from './referenceLabels';
 
 type Coordinates = { longitude: number; latitude: number };
-type CityVertex = Coordinates & { name: string; source_geoname_id: string };
+type CityVertex = Coordinates & { name: string; source_geoname_id: number };
 type ScreenBounds = { left: number; right: number; top: number; bottom: number };
 type SurfacePoint = { position: Cartesian3; normal: Cartesian3 };
 type LabelEntry = {
@@ -61,7 +61,7 @@ export class MapLabels {
       }
       for (const [id, name, longitude, latitude, scale] of cityLabels) {
         if (scale !== level) continue;
-        const vertex = { name, longitude, latitude, source_geoname_id: id };
+        const vertex = { name, longitude, latitude, source_geoname_id: Number(id) };
         this.entries.push(this.addEntry(name, longitude, latitude, scale, metrics, vertex));
       }
     }

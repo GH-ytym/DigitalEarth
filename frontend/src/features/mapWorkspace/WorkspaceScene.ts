@@ -85,13 +85,14 @@ export class WorkspaceScene {
         for (const annotation of next.annotations) {
           if (!annotation.visible) continue;
           const point = annotationVertex(annotation);
-          const activeLabel = active?.vertices.some(vertex =>
-            vertex.name && vertex.annotation_id === annotation.id && samePosition(vertex, point),
+          const isActiveVertex = active?.vertices.some(vertex =>
+            vertex.annotation_id === annotation.id && samePosition(vertex, point),
           );
+          if (isActiveVertex) continue;
           const entity = this.addPoint(
             this.annotations.entities, point, markerOrange,
             annotation.id === next.selectedAnnotationId ? 13 : 10,
-            activeLabel ? undefined : point.name,
+            point.name,
           );
           this.annotationPicks.set(entity, point);
         }

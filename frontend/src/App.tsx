@@ -301,7 +301,7 @@ export default function App() {
                     longitude: pickedPlace.longitude,
                     latitude: pickedPlace.latitude,
                     name: pickedPlace.name,
-                    source_geoname_id: String(pickedPlace.geoname_id),
+                    source_geoname_id: pickedPlace.geoname_id,
                   });
                   if (started) setPanel('annotations');
                 }}>
