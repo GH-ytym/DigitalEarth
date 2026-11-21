@@ -1,7 +1,9 @@
 param()
 $ErrorActionPreference = 'Stop'
 $taskRepo = Split-Path -Parent $PSScriptRoot
-foreach ($taskSecretName in @('db-password.local', 'api-password.local')) {
+$taskWorkspace = Join-Path $PSScriptRoot 'workspace.local'
+[System.IO.Directory]::CreateDirectory($taskWorkspace) | Out-Null
+foreach ($taskSecretName in @('db-password.local', 'api-password.local', 'workspace.local/password')) {
   $taskSecret = Join-Path $PSScriptRoot $taskSecretName
   if (-not (Test-Path -LiteralPath $taskSecret)) {
     $taskBytes = [byte[]]::new(32)

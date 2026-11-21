@@ -32,7 +32,10 @@ services:
       PGUSER: digitalearth_reader
       PGPASSWORD_FILE: /run/secrets/api_password
       PGSSLMODE: disable
+      WORKSPACE_PASSWORD_FILE: /run/digitalearth-workspace/password
     secrets: [api_password]
+    volumes:
+      - ./infra/workspace.local:/run/digitalearth-workspace:ro
     ports:
       - "127.0.0.1:${DIGITALEARTH_API_PORT:-8080}:8080"
     depends_on:
@@ -75,6 +78,30 @@ services:
         target: /reports
         bind:
           create_host_path: false
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  workspace-setup:
+    image: digitalearth-geonames-gazetteer
+    profiles: [operations]
+    build:
+      context: ./backend
+    command: [setup-workspace]
+    environment:
+      PGHOST: db
+      PGPORT: "5432"
+      PGDATABASE: digitalearth
+      PGUSER: digitalearth
+      PGPASSWORD_FILE: /run/secrets/db_password
+      PGSSLMODE: disable
+      WORKSPACE_PASSWORD_FILE: /run/digitalearth-workspace/password
+    secrets: [db_password]
+    volumes:
+      - ./infra/workspace.local:/run/digitalearth-workspace:ro
     depends_on:
       db:
         condition: service_healthy

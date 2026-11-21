@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"digitalearth.local/gazetteer/internal/gazetteer"
+	"digitalearth.local/gazetteer/internal/workspace"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -22,8 +23,9 @@ type Snapshot struct {
 }
 
 type Service struct {
-	Search func(context.Context, string, int) ([]gazetteer.Result, error)
-	Ready  func(context.Context) (Snapshot, error)
+	Search    func(context.Context, string, int) ([]gazetteer.Result, error)
+	Ready     func(context.Context) (Snapshot, error)
+	Workspace *workspace.Store
 }
 
 type Response struct {
@@ -46,6 +48,7 @@ func failure(w http.ResponseWriter, status int, code, message string) {
 
 func Handler(service Service) http.Handler {
 	mux := http.NewServeMux()
+	addWorkspaceRoutes(mux, service.Workspace)
 	mux.HandleFunc("/api/v1/locations", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", "GET")
@@ -139,6 +142,14 @@ func Run(ctx context.Context, address string) error {
 			return gazetteer.Search(ctx, pool, q, limit)
 		},
 		Ready: func(ctx context.Context) (Snapshot, error) { return ready(ctx, pool) },
+	}
+	workspacePool, workspaceErr := workspace.OpenPool(ctx)
+	if workspaceErr != nil {
+		log.Print("map workspace connection is not configured")
+	}
+	if workspacePool != nil {
+		defer workspacePool.Close()
+		service.Workspace = workspace.NewStore(workspacePool)
 	}
 	server := &http.Server{Addr: address, Handler: Handler(service), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
 	stopped := make(chan struct{})

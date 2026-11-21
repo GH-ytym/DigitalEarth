@@ -14,6 +14,7 @@ import (
 
 	"digitalearth.local/gazetteer/internal/gazetteer"
 	"digitalearth.local/gazetteer/internal/httpapi"
+	"digitalearth.local/gazetteer/internal/workspace"
 )
 
 func output(value any, path string) error {
@@ -33,7 +34,7 @@ func output(value any, path string) error {
 
 func run(ctx context.Context) error {
 	if len(os.Args) < 2 {
-		return errors.New("usage: gazetteer import|query|verify|setup-reader|serve|healthcheck [options]")
+		return errors.New("usage: gazetteer import|query|verify|setup-reader|setup-workspace|serve|healthcheck [options]")
 	}
 	command := os.Args[1]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -43,6 +44,7 @@ func run(ctx context.Context) error {
 	limit := flags.Int("limit", 6, "result limit (1–10)")
 	listen := flags.String("listen", ":8080", "HTTP listen address")
 	apiPassword := flags.String("api-password-file", os.Getenv("API_PASSWORD_FILE"), "API role password file")
+	workspacePassword := flags.String("workspace-password-file", os.Getenv("WORKSPACE_PASSWORD_FILE"), "workspace role password file")
 	if err := flags.Parse(os.Args[2:]); err != nil {
 		return err
 	}
@@ -77,6 +79,17 @@ func run(ctx context.Context) error {
 			return err
 		}
 		fmt.Println("Read-only GeoNames API account configured.")
+		return nil
+	case "setup-workspace":
+		conn, err := gazetteer.Connect(ctx)
+		if err != nil {
+			return err
+		}
+		defer conn.Close(context.Background())
+		if err := workspace.Setup(ctx, conn, *workspacePassword); err != nil {
+			return err
+		}
+		fmt.Println("Map workspace database and API account ready.")
 		return nil
 	case "import":
 		fmt.Fprintln(os.Stderr, "Reading GeoNames snapshot; source files are unchanged.")
