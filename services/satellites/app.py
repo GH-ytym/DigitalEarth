@@ -155,6 +155,11 @@ def download(result_id: UUID, request: Request):
     headers = {"ETag": etag, "Cache-Control": "private, max-age=31536000, immutable"}
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers=headers)
+    if not row["object_key"]:
+        tracks = [dict(satellite_id=spec["satellite_id"], samples=store.read_track(row, spec))
+                  for spec in row["manifest"]["satellites"]]
+        return JSONResponse(dict(schema_version="satellite-samples-1", result_id=str(result_id),
+                                 satellites=tracks), headers=headers)
     try:
         source = store.objects.get_object(store.settings.bucket, row["object_key"])
     except S3Error as exc:
@@ -176,13 +181,21 @@ def binary_track(result_id: UUID, norad_id: int, request: Request):
     row = store.get(str(result_id))
     if not row or row["status"] != "succeeded" or norad_id not in row["request"]["norad_ids"]:
         raise HTTPException(404, "轨迹不存在")
-    source = store.objects.get_object(store.settings.bucket, row["object_key"])
-    try:
-        tracks = json.load(source)["satellites"]
-    finally:
-        source.close()
-        source.release_conn()
-    track = next(t for t in tracks if t["satellite_id"] == f"norad-{norad_id}")
-    return Response(encode(track["samples"], row["manifest"]["output_step_s"]),
+    spec = next(s for s in row["manifest"]["satellites"] if s["norad_id"] == norad_id)
+    return Response(encode(store.read_track(row, spec), row["manifest"]["output_step_s"]),
                     media_type="application/octet-stream",
                     headers={"Cache-Control": "private, max-age=31536000, immutable"})
+
+@app.get(PREFIX + "/blocks/{norad_id}/{digest}")
+def orbit_block(norad_id: int, digest: str, request: Request):
+    import re
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise HTTPException(404)
+    try:
+        raw = request.app.state.service.store.read_bytes(f"orbit-blocks/{norad_id}/{digest}.orb")
+    except S3Error as exc:
+        if exc.code == "NoSuchKey":
+            raise HTTPException(404) from exc
+        raise
+    return Response(raw, media_type="application/octet-stream",
+                    headers={"Cache-Control":"private, max-age=31536000, immutable"})

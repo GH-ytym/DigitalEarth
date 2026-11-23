@@ -156,6 +156,20 @@ export async function readHistory(signal: AbortSignal): Promise<SavedTrack[]> {
 
 async function loadBinarySamples(manifest: SatelliteManifest, signal: AbortSignal): Promise<SatelliteSamples> {
   const satellites = await Promise.all(manifest.satellites.map(async sat => {
+    if ('blocks' in sat && Array.isArray(sat.blocks)) {
+      const samples: number[][] = [];
+      for (const block of sat.blocks) {
+        const match = /^orbit-blocks\/(\d+)\/([0-9a-f]{64})\.orb$/.exec(block.key);
+        if (!match || Number(match[1]) !== sat.norad_id || block.start !== samples.length * manifest.output_step_s)
+          throw new Error('轨迹分块索引无效');
+        const response = await fetch(`${satelliteApi}/blocks/${match[1]}/${match[2]}`, { signal });
+        if (!response.ok) throw new Error('轨迹分块加载失败');
+        const rows = decodeOrbit(await response.arrayBuffer());
+        if (rows.length !== block.count) throw new Error('轨迹分块长度错误');
+        for (const row of rows) { row[0] += block.start; samples.push(row); }
+      }
+      return { satellite_id: sat.satellite_id, samples };
+    }
     const response = await fetch(`${satelliteApi}/tracks/${manifest.result_id}/binary/${sat.norad_id}`, { signal });
     if (!response.ok) throw new Error('轨迹包加载失败');
     return { satellite_id: sat.satellite_id, samples: decodeOrbit(await response.arrayBuffer()) };

@@ -1,4 +1,6 @@
 """PostgreSQL stores the index; MinIO stores the complete immutable samples."""
+from hashlib import sha256
+from orbit_codec import encode, decode
 from io import BytesIO
 import json
 from uuid import uuid4
@@ -79,19 +81,44 @@ class Store:
             conn.execute("UPDATE satellite_results SET status='running',updated_at=now() WHERE result_id=%s", (result_id,))
 
     def save(self, result_id, samples, manifest):
-        raw = json.dumps(samples, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
-        key = f"orbits/{result_id}/samples.json"
-        self.objects.put_object(self.settings.bucket, key, BytesIO(raw), len(raw), content_type="application/json")
-        manifest["byte_length"] = len(raw)
+        step = manifest["output_step_s"]
+        per_hour = 3600 // step
+        for spec, track in zip(manifest["satellites"], samples["satellites"], strict=True):
+            rows = track["samples"]
+            blocks = []
+            for first in range(0, len(rows) - 1, per_hour):
+                # Keep the final endpoint in the last hour, without duplicating boundaries.
+                end = first + per_hour
+                part = rows[first:] if end >= len(rows)-1 else rows[first:end]
+                start = int(part[0][0])
+                raw = encode([[t-start, x, y, z] for t,x,y,z in part], step)
+                digest = sha256(raw).hexdigest()
+                key = f"orbit-blocks/{spec['norad_id']}/{digest}.orb"
+                self.objects.put_object(self.settings.bucket, key, BytesIO(raw), len(raw),
+                                        content_type="application/octet-stream")
+                blocks.append(dict(start=start, count=len(part), key=key))
+            spec["blocks"] = blocks
+        with self.connect() as conn:
+            conn.execute("""UPDATE satellite_results SET status='succeeded',object_key=NULL,
+                manifest=%s,updated_at=now() WHERE result_id=%s""", (Jsonb(manifest), result_id))
+
+    def read_bytes(self, key):
+        source = self.objects.get_object(self.settings.bucket, key)
         try:
-            with self.connect() as conn:
-                conn.execute("""UPDATE satellite_results SET status='succeeded',object_key=%s,
-                    manifest=%s,error=NULL,updated_at=now() WHERE result_id=%s""",
-                    (key, Jsonb(manifest), result_id))
-        except Exception:
-            # Only remove the object created for this failed, unpublished result.
-            self.objects.remove_object(self.settings.bucket, key)
-            raise
+            return source.read()
+        finally:
+            source.close()
+            source.release_conn()
+
+    def read_track(self, row, spec):
+        if "blocks" not in spec:
+            tracks = json.loads(self.read_bytes(row["object_key"]))["satellites"]
+            return next(t["samples"] for t in tracks if t["satellite_id"] == spec["satellite_id"])
+        rows = []
+        for block in spec["blocks"]:
+            for t, x, y, z in decode(self.read_bytes(block["key"])):
+                rows.append([block["start"] + t, x, y, z])
+        return rows
 
     def fail(self, result_id, message):
         with self.connect() as conn:
