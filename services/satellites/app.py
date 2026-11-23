@@ -167,3 +167,22 @@ def download(result_id: UUID, request: Request):
             source.release_conn()
     headers["Content-Length"] = str(row["manifest"]["byte_length"])
     return StreamingResponse(chunks(), media_type="application/json", headers=headers)
+
+@app.get(PREFIX + "/tracks/{result_id}/binary/{norad_id}")
+def binary_track(result_id: UUID, norad_id: int, request: Request):
+    import json
+    from orbit_codec import encode
+    store = request.app.state.service.store
+    row = store.get(str(result_id))
+    if not row or row["status"] != "succeeded" or norad_id not in row["request"]["norad_ids"]:
+        raise HTTPException(404, "轨迹不存在")
+    source = store.objects.get_object(store.settings.bucket, row["object_key"])
+    try:
+        tracks = json.load(source)["satellites"]
+    finally:
+        source.close()
+        source.release_conn()
+    track = next(t for t in tracks if t["satellite_id"] == f"norad-{norad_id}")
+    return Response(encode(track["samples"], row["manifest"]["output_step_s"]),
+                    media_type="application/octet-stream",
+                    headers={"Cache-Control": "private, max-age=31536000, immutable"})

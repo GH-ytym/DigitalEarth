@@ -1,3 +1,4 @@
+import { decodeOrbit } from './orbitCodec';
 import type { SavedTrack, SatelliteCatalog, SatelliteJob, SatelliteManifest, SatelliteModelResolution, SatelliteSamples } from './types';
 
 export const satelliteApi = '/api/v1/satellites';
@@ -116,7 +117,7 @@ export async function loadSavedTrack(id: string, signal: AbortSignal) {
     }
     return response.models;
   })();
-  const [samples, resolvedModels] = await Promise.all([satelliteJSON<unknown>(manifest.samples_url, signal), models]);
+  const [samples, resolvedModels] = await Promise.all([loadBinarySamples(manifest, signal), models]);
   if (!isSamples(samples, manifest)) throw new Error('卫星轨迹采样格式异常。');
   return { manifest, samples, models: resolvedModels };
 }
@@ -151,4 +152,13 @@ export async function readHistory(signal: AbortSignal): Promise<SavedTrack[]> {
   const data = await satelliteJSON<{ results: SavedTrack[] }>(`${satelliteApi}/tracks`, signal);
   if (!Array.isArray(data.results)) throw new Error('轨迹列表格式异常。');
   return data.results.filter(row => row.status === 'succeeded' && isManifest(row.manifest));
+}
+
+async function loadBinarySamples(manifest: SatelliteManifest, signal: AbortSignal): Promise<SatelliteSamples> {
+  const satellites = await Promise.all(manifest.satellites.map(async sat => {
+    const response = await fetch(`${satelliteApi}/tracks/${manifest.result_id}/binary/${sat.norad_id}`, { signal });
+    if (!response.ok) throw new Error('轨迹包加载失败');
+    return { satellite_id: sat.satellite_id, samples: decodeOrbit(await response.arrayBuffer()) };
+  }));
+  return { schema_version: 'satellite-samples-1', result_id: manifest.result_id, satellites };
 }
