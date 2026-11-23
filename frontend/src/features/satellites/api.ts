@@ -1,4 +1,4 @@
-import { decodeOrbit } from './orbitCodec';
+import { decodeOrbit } from './orbitCodec.ts';
 import type { SavedTrack, SatelliteCatalog, SatelliteJob, SatelliteManifest, SatelliteModelResolution, SatelliteSamples } from './types';
 
 export const satelliteApi = '/api/v1/satellites';
