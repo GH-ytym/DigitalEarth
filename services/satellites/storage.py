@@ -1,4 +1,5 @@
 """PostgreSQL stores the index; MinIO stores the complete immutable samples."""
+import re
 from hashlib import sha256
 from orbit_codec import encode, decode
 from io import BytesIO
@@ -43,6 +44,36 @@ class Store:
         if not self.objects.bucket_exists(self.settings.bucket):
             self.objects.make_bucket(self.settings.bucket)
 
+        self.reconcile()
+
+    @staticmethod
+    def lock_publication(conn):
+        # Serialize namespace garbage collection with the complete PUT + SQL publication.
+        conn.execute("SELECT pg_advisory_xact_lock(904231708)")
+
+    def reconcile(self):
+        with self.connect() as conn:
+            self.lock_publication(conn)
+            existing = set()
+            for prefix in ("orbit-blocks/", "orbits/"):
+                for obj in self.objects.list_objects(self.settings.bucket, prefix=prefix, recursive=True):
+                    if re.fullmatch(r"orbit-blocks/[0-9]+/[0-9a-f]{64}\.orb|orbits/[0-9a-f-]{36}/samples\.json",
+                                    obj.object_name):
+                        existing.add(obj.object_name)
+            referenced = set()
+            for row in conn.execute("""SELECT result_id, manifest, object_key FROM satellite_results
+                                       WHERE status='succeeded' FOR UPDATE""").fetchall():
+                keys = ({row["object_key"]} if row["object_key"] else
+                        {b["key"] for sat in row["manifest"]["satellites"] for b in sat["blocks"]})
+                if keys and keys <= existing:
+                    referenced.update(keys)
+                else:
+                    conn.execute("""UPDATE satellite_results SET status='failed', object_key=NULL,
+                                 manifest=NULL, error='Missing orbit object; resubmit to regenerate.',
+                                 updated_at=now() WHERE result_id=%s""", (row["result_id"],))
+            for key in existing - referenced:
+                self.objects.remove_object(self.settings.bucket, key)
+
     def find_key(self, key):
         with self.connect() as conn:
             return conn.execute("SELECT * FROM satellite_results WHERE cache_key=%s", (key,)).fetchone()
@@ -81,6 +112,21 @@ class Store:
             conn.execute("UPDATE satellite_results SET status='running',updated_at=now() WHERE result_id=%s", (result_id,))
 
     def save(self, result_id, samples, manifest):
+        try:
+            with self.connect() as conn:
+                self.lock_publication(conn)
+                self.publish(conn, result_id, samples, manifest)
+        except Exception:
+            # Re-read committed references, including after an ambiguous COMMIT.
+            # If storage itself is offline, startup retries the same reconciliation.
+            self.reconcile()
+            raise
+
+    def publish(self, conn, result_id, samples, manifest):
+        job = conn.execute("SELECT status FROM satellite_results WHERE result_id=%s FOR UPDATE",
+                           (result_id,)).fetchone()
+        if not job or job["status"] != "running":
+            raise ValueError("Cannot publish an inactive orbit job")
         step = manifest["output_step_s"]
         per_hour = 3600 // step
         for spec, track in zip(manifest["satellites"], samples["satellites"], strict=True):
@@ -98,8 +144,7 @@ class Store:
                                         content_type="application/octet-stream")
                 blocks.append(dict(start=start, count=len(part), key=key))
             spec["blocks"] = blocks
-        with self.connect() as conn:
-            conn.execute("""UPDATE satellite_results SET status='succeeded',object_key=NULL,
+        conn.execute("""UPDATE satellite_results SET status='succeeded',object_key=NULL,
                 manifest=%s,updated_at=now() WHERE result_id=%s""", (Jsonb(manifest), result_id))
 
     def read_bytes(self, key):
@@ -123,4 +168,4 @@ class Store:
     def fail(self, result_id, message):
         with self.connect() as conn:
             conn.execute("""UPDATE satellite_results SET status='failed',error=%s,updated_at=now()
-                WHERE result_id=%s""", (message, result_id))
+                WHERE result_id=%s AND status IN ('queued','running')""", (message, result_id))
