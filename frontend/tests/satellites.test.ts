@@ -80,6 +80,8 @@ test('saved tracks fetch current models separately and in parallel with immutabl
   Object.defineProperty(globalThis, 'window', { configurable: true, value: globalThis });
   const legacyManifest = { ...manifest, satellites: [{ ...manifest.satellites[0], norad_id: 43013, satellite_id: 'norad-43013' }] };
   const legacySamples = { ...payload, satellites: [{ ...payload.satellites[0], satellite_id: 'norad-43013' }] };
+  const binaryPath = `/api/v1/satellites/tracks/${manifest.result_id}/binary/43013`;
+  const packet = Uint8Array.from([79, 82, 66, 49, 2, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 128, 246, 224, 66, 0, 0, 159, 146, 226, 66, 128, 137, 122, 0]);
   const requests: Array<{ path: string; method: string; body: unknown }> = [];
   let currentModel = { ...model, norad_id: 43013 };
   let invalidResolution = false;
@@ -89,9 +91,10 @@ test('saved tracks fetch current models separately and in parallel with immutabl
     const path = String(input);
     requests.push({ path, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined });
     if (path === `/api/v1/satellites/tracks/${manifest.result_id}`) return new Response(JSON.stringify(legacyManifest));
-    if (path !== manifest.samples_url && path !== '/api/v1/satellites/models/resolve') throw new Error(`Unexpected request: ${path}`);
+    if (path !== binaryPath && path !== '/api/v1/satellites/models/resolve') throw new Error(`Unexpected request: ${path}`);
     if (hold) await new Promise<void>(resolve => release.push(resolve));
-    return new Response(JSON.stringify(path === manifest.samples_url ? legacySamples : { models: invalidResolution ? [] : [currentModel] }));
+    if (path === binaryPath) return new Response(packet);
+    return new Response(JSON.stringify({ models: invalidResolution ? [] : [currentModel] }));
   };
   try {
     const loading = loadSavedTrack(manifest.result_id, new AbortController().signal);
