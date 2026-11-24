@@ -1,6 +1,6 @@
 import {
   ArcType, Cartesian2, Cartesian3, Cartographic, ClockRange, ClockStep, Color, CustomDataSource,
-  ConstantProperty, CallbackPositionProperty, ColorGeometryInstanceAttribute, GeometryInstance, PolylineColorAppearance,
+  ModelGraphics, ConstantProperty, CallbackPositionProperty, ColorGeometryInstanceAttribute, GeometryInstance, PolylineColorAppearance,
   PolylineGeometry, Primitive, HeightReference, JulianDate, LabelStyle, Math as CesiumMath, ReferenceFrame,
   TimeInterval, TimeIntervalCollection, TrackingReferenceFrame, VelocityOrientationProperty,
 } from 'cesium';
@@ -21,6 +21,8 @@ export class SatellitePlayback {
   private errors = new Map<string, string>();
   private trackLines = new Map<string, Primitive[]>();
   private lines: Primitive[] = [];
+  private pendingModels = new Map<Entity, SatelliteModel>();
+  private stopWaitingForLines?: () => void;
   private buffers = new Map<string, {xyz: Float64Array; loaded: Uint8Array}>();
   private entities: Entity[] = [];
   private orbitRadius = earthRadius;
@@ -79,6 +81,12 @@ export class SatellitePlayback {
       this.manifest = manifest;
       this.models = models;
       this.epoch = JulianDate.fromIso8601(manifest.epoch_utc);
+      for (const satellite of manifest.satellites) {
+        if (satellite.overview && !this.trackLines.has(satellite.satellite_id)) {
+          const color = Color.fromCssColorString(colors[satellite.norad_id % colors.length]);
+          this.addLine(satellite.satellite_id, Cartesian3.unpackArray(satellite.overview), color);
+        }
+      }
     }
     const spec = chunk.satellite;
     const id = spec.satellite_id;
@@ -109,9 +117,7 @@ export class SatellitePlayback {
     this.orbitBounds.set(id, bounds);
     const expandView = firstChunk && this.orbitRadius * 1.1 < bounds.max;
     this.orbitRadius = Math.max(this.orbitRadius, bounds.max);
-    if (firstChunk && overview) {
-      this.addLine(id, Cartesian3.unpackArray(overview), color);
-    } else if (!overview) {
+    if (!overview) {
       // Older manifests have no overview. Join already loaded neighbours at hour boundaries.
       const first = Math.max(0, chunk.first - (loaded[chunk.first-1] ? 1 : 0));
       const last = end - 1 + (loaded[end] ? 1 : 0);
@@ -146,20 +152,20 @@ export class SatellitePlayback {
         subpoint.position = subsatellitePosition(position);
         subpoint.availability = availability;
       } else {
-        this.entities.push(this.source.entities.add({ id: spec.satellite_id, position,
+        const entity = this.source.entities.add({ id: spec.satellite_id, position,
           availability,
           // Keep a north-up Earth overview; only the view centre follows the satellite.
           trackingReferenceFrame: TrackingReferenceFrame.ENU,
           viewFrom: this.followOffset(bounds),
           orientation: new VelocityOrientationProperty(position),
-          model: { uri: model.model_url, scale: model.render_options.scale,
-            minimumPixelSize: model.render_options.minimum_pixel_size, maximumScale: model.render_options.maximum_scale },
           point: { pixelSize: 6, color },
           label: { text: spec.object_name, font: '13px sans-serif', fillColor: color,
             outlineColor: Color.fromCssColorString('#06162e'), outlineWidth: 3,
             style: LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cartesian2(0, -26) },
           path: { leadTime: 0, trailTime: 900, resolution: manifest.output_step_s, width: 2.5, material: color },
-        }));
+        });
+        this.entities.push(entity);
+        this.queueModel(entity, model);
         this.source.entities.add({ id: `${spec.satellite_id}-subpoint`, availability,
           position: subsatellitePosition(position),
           point: { pixelSize: 10, color, outlineColor: Color.fromCssColorString('#06162e'),
@@ -188,6 +194,30 @@ export class SatellitePlayback {
     this.viewer.scene.requestRender();
     this.tick(true);
     return JulianDate.secondsDifference(this.viewer.clock.currentTime, this.epoch);
+  }
+
+  private queueModel(entity: Entity, model: SatelliteModel) {
+    this.pendingModels.set(entity, model);
+    if (this.stopWaitingForLines) return;
+    const scene = this.viewer.scene;
+    this.stopWaitingForLines = scene.postRender.addEventListener(() => {
+      // Give the overview a rendered frame before starting glTF resource creation.
+      if (this.lines.some(line => !line.ready)) {
+        scene.requestRender();
+        return;
+      }
+      this.stopWaitingForLines?.();
+      this.stopWaitingForLines = undefined;
+      for (const [target, descriptor] of this.pendingModels) {
+        target.model = new ModelGraphics({
+          uri: descriptor.model_url, scale: descriptor.render_options.scale,
+          minimumPixelSize: descriptor.render_options.minimum_pixel_size,
+          maximumScale: descriptor.render_options.maximum_scale,
+        });
+      }
+      this.pendingModels.clear();
+      scene.requestRender();
+    });
   }
 
   private addLine(id: string, positions: Cartesian3[], color: Color) {
@@ -310,6 +340,9 @@ export class SatellitePlayback {
     this.viewer.scene.maximumRenderTimeChange = Infinity;
     this.viewer.trackedEntity = undefined;
     this.following = null;
+    this.stopWaitingForLines?.();
+    this.stopWaitingForLines = undefined;
+    this.pendingModels.clear();
     this.source.entities.removeAll();
     for (const line of this.lines) this.viewer.scene.primitives.remove(line);
     this.lines = [];
