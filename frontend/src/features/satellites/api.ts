@@ -132,16 +132,23 @@ export async function loadSelectedTrack(ids: number[], signal: AbortSignal, rece
   if (preview && submitted.preview_supported && (job.status === 'queued' || job.status === 'running')) {
     let cursor = 0;
     while (performance.now() < deadline) {
-      const response = await fetch(`${satelliteApi}/jobs/${job.job_id}/preview?cursor=${cursor}`, {signal});
-      if (response.status === 204) break;
-      if (response.status === 202) continue;
-      if (!response.ok) break;
+      let response: Response;
+      let bytes: ArrayBuffer;
+      try {
+        response = await fetch(`${satelliteApi}/jobs/${job.job_id}/preview?cursor=${cursor}`, {signal});
+        if (response.status === 202) continue;
+        if (response.status === 204 || !response.ok) break;
+        bytes = await response.arrayBuffer();
+      } catch {
+        signal.throwIfAborted();
+        break; // The job can still publish the missing packs after a transport failure.
+      }
       const norad = Number(response.headers.get('X-Norad'));
       const epoch = Number(response.headers.get('X-Epoch'));
       const duration = Number(response.headers.get('X-Duration'));
       const digest = response.headers.get('X-Digest') ?? '';
       if (!ids.includes(norad) || !/^[0-9a-f]{64}$/.test(digest)) throw new Error('单星轨迹标识无效');
-      const fixed = await acceptFixedOrbit(await response.arrayBuffer(), `${satelliteApi}/packs/${norad}/${digest}`,
+      const fixed = await acceptFixedOrbit(bytes, `${satelliteApi}/packs/${norad}/${digest}`,
         digest, epoch, epoch, duration, 10);
       signal.throwIfAborted();
       early.set(digest, fixed);
@@ -151,7 +158,7 @@ export async function loadSelectedTrack(ids: number[], signal: AbortSignal, rece
     job = await satelliteJSON<SatelliteJob>(`${satelliteApi}/jobs/${job.job_id}`, signal);
   }
   while (job.status === 'queued' || job.status === 'running') {
-    if (performance.now() > deadline) throw new Error('轨迹尚未完成，可稍后从已保存结果重新加载。');
+    if (performance.now() > deadline) throw new Error('轨迹尚未完成，请稍后重新加载。');
     await new Promise<void>((resolve, reject) => {
       const abort = () => { window.clearTimeout(timer); reject(new DOMException('Aborted', 'AbortError')); };
       const timer = window.setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, 350);

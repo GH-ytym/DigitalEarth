@@ -74,6 +74,8 @@ docker compose --env-file services/satellites/.env -f infra/satellites.compose.y
 | `GET /tracks/{id}/samples` | 读取完整轨迹并返回兼容的 JSON 采样 |
 | `GET /packs/{norad_id}/{digest}` | 按内容哈希读取单星全天 ORF1 文件，旧成果仍可读取 ORB1 及其字节范围 |
 
+内网 HTTP 部署请完整分发前端构建目录 `dist/`。轨迹包优先通过 Web Crypto 校验 SHA-256，普通 HTTP 下从同站点加载构建附带的校验模块，无需公网 CDN。轨道计算可使用已导入的公开要素快照；隔离网内的底图、地形和要素更新来源需另行配置或适配。
+
 ORF1 头部为 20 字节，依次保存标识、uint32 点数、int64 UTC 起始秒、uint32 源步长。数值字段均为小端。
 每点为三个 int32 地固坐标，单位为分米。浏览器按不可变 URL 在 IndexedDB 保存完整文件，回放时从
 `20 + 12 × 源点下标` 读取相邻采样做插值，新成果相邻采样相距 12 字节。浏览器存储不可用时仍可在线回放。
@@ -97,7 +99,7 @@ GLB 是通用卫星示意模型，在远距离放大以便辨认；轨道位置�
 
 ## 主前端接入与生命周期
 
-`SatellitePanel.tsx` 提供真实卫星选择、名称/编号搜索、分类筛选、更新数据、历史成果及来源查看。卫星和历史列表独立滚动；可选择目录中的全部卫星。要素时间可通过卫星条目提示或加载后的来源详情查看。`api.ts` 校验编号、格式、单位、时间和完整采样数组。通过验证后，`SceneController.loadSatellites` 把数据交给 `SatellitePlayback`。
+`SatellitePanel.tsx` 提供真实卫星选择、名称/编号搜索、分类筛选、更新数据和来源查看。面板按当前选择加载轨迹，历史成果仍可通过轨迹 API 读取。卫星列表可滚动；可选择目录中的全部卫星。要素时间可通过卫星条目提示或加载后的来源详情查看。`api.ts` 校验编号、格式、单位、时间和完整采样数组。通过验证后，`SceneController.loadSatellites` 把数据交给 `SatellitePlayback`。
 
 `SatellitePlayback` 通过 `CustomDataSource` 管理自己的对象集合，使用现有 Viewer，不删除其他图层、地名标记和鼠标监听。切换面板保留场景和当前时间，卸载轨迹只清除卫星对象。控制器销毁时移除卫星时钟监听并销毁数据源。
 
@@ -150,4 +152,4 @@ uv run python -m unittest discover -s tests -p 'test_*.py' -v
 
 测试将实际公开 GP 数据的 DLL 输出与 Python SGP4 参考实现比较，并验证缓冲区边界、保存、复用及应用重建；模型测试覆盖自包含 GLB、版本与绑定切换、文件/数据库发布失败及历史轨迹复用。SGP4 包仅用于开发测试，不参与生产传播。
 
-主前端和 API 启动后，在服务目录执行 `uv run python tests/browser_main.py`，验证单 Viewer、动态运行、时间轴展开与折叠、跟随视角、暂停/倍速/拖动无 API 调用、历史恢复，以及原图层和查询面板。前端单元测试验证星下点的椭球投影、插值时刻和时间范围。截图和临时运行结果位于仓库 `work/satellites`，不进入提交。
+主前端和 API 启动后，在服务目录执行 `uv run python tests/browser_main.py`，验证单 Viewer、动态运行、时间轴展开与折叠、跟随视角、暂停/倍速/拖动无 API 调用、按当前选择重新加载，以及原图层和查询面板。前端单元测试验证星下点的椭球投影、插值时刻和时间范围。截图和临时运行结果位于仓库 `work/satellites`，不进入提交。

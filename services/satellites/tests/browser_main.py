@@ -88,18 +88,17 @@ with sync_playwright() as playwright:
       const playbackUrl = performance.getEntriesByType('resource')
         .find(e => new URL(e.name).pathname === '/src/features/satellites/SatellitePlayback.ts').name;
       const { SatellitePlayback } = await import(playbackUrl);
-      const addLine = SatellitePlayback.prototype.addLine;
-      const clear = SatellitePlayback.prototype.clear;
-      SatellitePlayback.prototype.clear = function(...args) {
-        window.__testOrbitPoints = [];
-        return clear.apply(this, args);
+      const points = new WeakMap();
+      const makeLine = SatellitePlayback.prototype.makeLine;
+      SatellitePlayback.prototype.makeLine = function(id, positions, color) {
+        const line = makeLine.call(this, id, positions, color);
+        points.set(line, positions);
+        return line;
       };
-      SatellitePlayback.prototype.addLine = function(id, positions, color) {
-        window.__testOrbitPoints.push(...positions);
-        return addLine.call(this, id, positions, color);
-      };
+      window.__testOrbitPoints = () => window.__testPlayback.lines.flatMap(line => points.get(line) ?? []);
       const load = SceneController.prototype.loadSatellites;
       SceneController.prototype.loadSatellites = function(...args) {
+        window.__testPlayback = this.satellitePlayback;
         window.__testViewer = this.viewer;
         window.__testManifest = args[0];
         window.__testSamples = args[1];
@@ -279,8 +278,9 @@ with sync_playwright() as playwright:
         framing = page.evaluate("""() => {
           const v = window.__testViewer;
           let outside = 0;
-          if (!window.__testOrbitPoints?.length) throw Error('Missing static orbit geometry');
-          for (const p of window.__testOrbitPoints) {
+          const points = window.__testOrbitPoints();
+          if (!points.length) throw Error('Missing static orbit geometry');
+          for (const p of points) {
             const s = v.scene.cartesianToCanvasCoordinates(p);
             if (!s || s.x<0 || s.y<0 || s.x>v.scene.canvas.clientWidth || s.y>v.scene.canvas.clientHeight) outside++;
           }

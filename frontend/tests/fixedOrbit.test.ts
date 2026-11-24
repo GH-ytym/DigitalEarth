@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FixedOrbit } from '../src/features/satellites/fixedOrbit.ts';
+import { createHash } from 'node:crypto';
+import { FixedOrbit, acceptFixedOrbit } from '../src/features/satellites/fixedOrbit.ts';
 
 test('fixed records support signed coordinates, nonzero windows and 30-second strides', () => {
   const epoch = 1_750_000_000;
@@ -25,4 +26,18 @@ test('fixed records support signed coordinates, nonzero windows and 30-second st
   assert.throws(() => new FixedOrbit(raw, epoch, epoch + 1, 300, 30));
   assert.throws(() => new FixedOrbit(raw, epoch, epoch + 10, 86400, 10));
   assert.throws(() => new FixedOrbit(raw.slice(0, -1), epoch, epoch, 300, 10));
+});
+
+test('plain HTTP verifies the complete pack and rejects changed bytes', async t => {
+  t.mock.getter(globalThis, 'crypto', () => ({} as Crypto));
+  const bytes = new ArrayBuffer(20 + 8641 * 12);
+  const header = new DataView(bytes);
+  header.setUint32(0, 0x4f524631);
+  header.setUint32(4, 8641, true);
+  header.setUint32(16, 10, true);
+  const digest = createHash('sha256').update(new Uint8Array(bytes)).digest('hex');
+  const verify = () => acceptFixedOrbit(bytes, '/pack', digest, 0, 0, 86400, 10);
+  assert.equal((await verify()).count, 8641);
+  header.setInt32(20, 1, true);
+  await assert.rejects(verify(), /校验失败/);
 });

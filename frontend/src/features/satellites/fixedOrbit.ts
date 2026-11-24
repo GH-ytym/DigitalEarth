@@ -82,8 +82,10 @@ export async function loadFixedOrbit(url: string, digest: string, sourceEpoch: n
 }
 
 export async function acceptFixedOrbit(bytes: ArrayBuffer, url: string, digest: string, sourceEpoch: number, epoch: number, duration: number, step: number) {
-  const hash = await crypto.subtle.digest('SHA-256', bytes);
-  if (Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('') !== digest)
+  const hash = globalThis.crypto?.subtle
+    ? Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('')
+    : (await import('js-sha256')).sha256(bytes);
+  if (hash !== digest)
     throw new Error('单星轨迹校验失败');
   const orbit = new FixedOrbit(bytes, sourceEpoch, epoch, duration, step);
   await write(url, bytes).catch(() => undefined); // Storage quota and private browsing can disable persistence.
