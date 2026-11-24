@@ -43,7 +43,7 @@ class SatelliteService:
     def cache_key(self, prepared):
         identity = {key: prepared[key] for key in ("norad_ids", "epoch_utc", "duration_s", "output_step_s")}
         identity["elements"] = [row["fingerprint"] for row in prepared["elements"]]
-        identity.update(engine=ENGINE_VERSION, dll=self.native.fingerprint, frame=FRAME_VERSION, schema="satellites-1")
+        identity.update(engine=ENGINE_VERSION, dll=self.native.fingerprint, frame=FRAME_VERSION, schema="orbit-pack-1")
         return sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
     def submit(self, ids):

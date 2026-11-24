@@ -59,7 +59,7 @@ export class SatellitePlayback {
         for (const old of previous.satellites) {
           const next = manifest.satellites.find(s => s.satellite_id === old.satellite_id)!;
           const sameSamples = previous.output_step_s === manifest.output_step_s &&
-            old.blocks && next.blocks && old.blocks.length === next.blocks.length &&
+            old.pack_key === next.pack_key && old.blocks && next.blocks && old.blocks.length === next.blocks.length &&
             old.blocks.every((b,i) => b.key === next.blocks![i].key && b.start === next.blocks![i].start);
           if (sameSamples) continue;
           this.buffers.delete(old.satellite_id);

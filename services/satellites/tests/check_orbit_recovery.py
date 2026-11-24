@@ -49,8 +49,14 @@ def run():
             else:
                 raise AssertionError("expected a publication failure")
         stored = {o.object_name for o in store.objects.list_objects(settings.bucket, recursive=True)}
-        assert stored == {b["key"] for b in blocks}
-        store.objects.remove_object(settings.bucket, blocks[0]["key"])
+        spec = store.get(first)["manifest"]["satellites"][0]
+        key = spec["pack_key"]
+        assert stored == {key}
+        full = store.read_bytes(key)
+        for block in blocks:
+            offset, length = block["offset"], block["length"]
+            assert store.read_bytes(key, offset, length) == full[offset:offset+length]
+        store.objects.remove_object(settings.bucket, key)
         store.initialize()
         assert all(store.get(i)["status"] == "failed" for i in (first, second, interrupted))
         assert not list(store.objects.list_objects(settings.bucket, recursive=True))

@@ -25,7 +25,8 @@ export interface TrackSatellite {
   display_name: string;
   object_name: string;
   sample_count: number;
-  blocks?: Array<{ key: string; start: number; count: number }>;
+  pack_key?: string;
+  blocks?: Array<{ key?: string; offset?: number; length?: number; start: number; count: number }>;
   overview?: number[];
   period_s: number;
   element_epoch_utc: string;

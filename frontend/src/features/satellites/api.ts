@@ -165,12 +165,26 @@ async function streamTracks(manifest: SatelliteManifest, signal: AbortSignal,
   try {
     async function loadSatellite(satellite: SatelliteManifest["satellites"][number]) {
       let count = 0;
+      const pack = satellite.pack_key?.match(/^orbit-packs\/(\d+)\/([0-9a-f]{64})\.orb$/);
+      if (satellite.pack_key !== undefined && (!pack || Number(pack[1]) !== satellite.norad_id))
+        throw new Error('轨迹对象索引无效');
+      let offset = 0;
       const parts = satellite.blocks?.map(block => {
-        const match = /^orbit-blocks\/(\d+)\/([0-9a-f]{64})\.orb$/.exec(block.key);
-        if (!match || Number(match[1]) !== satellite.norad_id || block.start !== count * step ||
-            !Number.isSafeInteger(block.count) || block.count <= 0) throw new Error('轨迹分块索引无效');
+        if (block.start !== count * step || !Number.isSafeInteger(block.count) || block.count <= 0)
+          throw new Error('轨迹分块索引无效');
         count += block.count;
-        return { first: block.start / step, count: block.count, url: `${satelliteApi}/blocks/${match[1]}/${match[2]}` };
+        let url: string;
+        if (pack) {
+          if (block.offset !== offset || !Number.isSafeInteger(block.length) || !block.length || block.length < 16)
+            throw new Error('轨迹分块字节范围无效');
+          url = `${satelliteApi}/packs/${pack[1]}/${pack[2]}?offset=${offset}&length=${block.length}`;
+          offset += block.length;
+        } else {
+          const match = block.key?.match(/^orbit-blocks\/(\d+)\/([0-9a-f]{64})\.orb$/);
+          if (!match || Number(match[1]) !== satellite.norad_id) throw new Error('轨迹分块索引无效');
+          url = `${satelliteApi}/blocks/${match[1]}/${match[2]}`;
+        }
+        return { first: block.start / step, count: block.count, url };
       });
       if (parts && count !== satellite.sample_count) throw new Error('轨迹分块总长度错误');
       const pending = parts ?? [{ first: 0, count: satellite.sample_count,

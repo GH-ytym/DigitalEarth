@@ -69,7 +69,8 @@ docker compose --env-file services/satellites/.env -f infra/satellites.compose.y
 | `GET /jobs/{id}` | 查询真实任务状态 |
 | `GET /tracks` | 已保存成果列表 |
 | `GET /tracks/{id}` | 成果说明，含时段、坐标、单位、要素、来源和采样地址 |
-| `GET /tracks/{id}/samples` | 从 MinIO 流式下载完整采样 |
+| `GET /tracks/{id}/samples` | 读取完整轨迹并返回兼容的 JSON 采样 |
+| `GET /packs/{norad_id}/{digest}` | 读取单星完整 ORB1 包；提供 `offset` 和 `length` 时，用 MinIO Range GET 仅读指定小时，响应是可独立缓存的二进制数据 |
 | `GET /health` | 数据库、对象桶及本进程 DLL 调用情况 |
 
 `POST /tracks` 不接受高度、倾角或其他用户自定义轨道参数。要素来自后端公开目录，时段和采样由服务器确定。新任务返回 202，已有成功成果返回 200 和 `cache_hit=true`。同一条件正在执行则共用任务，不重复传播。

@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from minio.error import S3Error
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -205,3 +205,24 @@ def orbit_block(norad_id: int, digest: str, request: Request):
         raise
     return Response(raw, media_type="application/octet-stream",
                     headers={"Cache-Control":"private, max-age=31536000, immutable"})
+
+@app.get(PREFIX + "/packs/{norad_id}/{digest}")
+def orbit_pack(norad_id: int, digest: str, request: Request,
+               offset: int = Query(0, ge=0), length: int | None = Query(None, ge=1)):
+    import re
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise HTTPException(404)
+    if offset and length is None:
+        raise HTTPException(422, "指定偏移时须提供长度")
+    try:
+        raw = request.app.state.service.store.read_bytes(f"orbit-packs/{norad_id}/{digest}.orb", offset, length or 0)
+    except S3Error as exc:
+        if exc.code == "NoSuchKey":
+            raise HTTPException(404) from exc
+        if exc.code == "InvalidRange":
+            raise HTTPException(416) from exc
+        raise
+    if length is not None and len(raw) != length:
+        raise HTTPException(416)
+    return Response(raw, media_type="application/octet-stream",
+                    headers={"Cache-Control": "private, max-age=31536000, immutable"})

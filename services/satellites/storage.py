@@ -56,16 +56,17 @@ class Store:
         with self.connect() as conn:
             self.lock_publication(conn)
             existing = set()
-            for prefix in ("orbit-blocks/", "orbits/"):
+            for prefix in ("orbit-blocks/", "orbit-packs/", "orbits/"):
                 for obj in self.objects.list_objects(self.settings.bucket, prefix=prefix, recursive=True):
-                    if re.fullmatch(r"orbit-blocks/[0-9]+/[0-9a-f]{64}\.orb|orbits/[0-9a-f-]{36}/samples\.json",
+                    if re.fullmatch(r"orbit-(?:blocks|packs)/[0-9]+/[0-9a-f]{64}\.orb|orbits/[0-9a-f-]{36}/samples\.json",
                                     obj.object_name):
                         existing.add(obj.object_name)
             referenced = set()
             for row in conn.execute("""SELECT result_id, manifest, object_key FROM satellite_results
                                        WHERE status='succeeded' FOR UPDATE""").fetchall():
                 keys = ({row["object_key"]} if row["object_key"] else
-                        {b["key"] for sat in row["manifest"]["satellites"] for b in sat["blocks"]})
+                        {key for sat in row["manifest"]["satellites"]
+                         for key in ([sat["pack_key"]] if "pack_key" in sat else [b["key"] for b in sat["blocks"]])})
                 if keys and keys <= existing:
                     referenced.update(keys)
                 else:
@@ -113,7 +114,7 @@ class Store:
         with self.connect() as conn:
             row = conn.execute("""SELECT sat FROM satellite_results r,
                 jsonb_array_elements(manifest->'satellites') sat
-                WHERE status='succeeded' AND sat ? 'overview' AND sat ? 'blocks' AND
+                WHERE status='succeeded' AND sat ? 'overview' AND sat ? 'pack_key' AND
                 (sat->>'sample_key'=%s OR (sat->>'norad_id'=%s AND
                  manifest->>'engine_version'=%s AND manifest->>'dll_fingerprint'=%s AND manifest->>'frame_version'=%s
                  AND r.request @> %s)) LIMIT 1""",
@@ -156,25 +157,30 @@ class Store:
                 overview = rows[:-1:stride] + [rows[-1]]
                 spec["overview"] = [coordinate for point in overview for coordinate in point[1:]]
                 blocks = []
+                packed = BytesIO()
                 for first in range(0, len(rows) - 1, per_hour):
                     # Keep the final endpoint in the last hour, without duplicating boundaries.
                     end = first + per_hour
                     part = rows[first:] if end >= len(rows)-1 else rows[first:end]
                     start = int(part[0][0])
                     raw = encode([[t-start, x, y, z] for t,x,y,z in part], step)
-                    digest = sha256(raw).hexdigest()
-                    key = f"orbit-blocks/{spec['norad_id']}/{digest}.orb"
-                    uploads.append(pool.submit(self.objects.put_object, self.settings.bucket, key,
-                                               BytesIO(raw), len(raw), content_type="application/octet-stream"))
-                    blocks.append(dict(start=start, count=len(part), key=key))
+                    blocks.append(dict(start=start, count=len(part), offset=packed.tell(), length=len(raw)))
+                    packed.write(raw)
+                size = packed.tell()
+                digest = sha256(packed.getbuffer()).hexdigest()
+                key = f"orbit-packs/{spec['norad_id']}/{digest}.orb"
+                packed.seek(0)
+                uploads.append(pool.submit(self.objects.put_object, self.settings.bucket, key,
+                                           packed, size, content_type="application/octet-stream"))
+                spec["pack_key"] = key
                 spec["blocks"] = blocks
             for upload in uploads:
                 upload.result()
         conn.execute("""UPDATE satellite_results SET status='succeeded',object_key=NULL,
                 manifest=%s,updated_at=now() WHERE result_id=%s""", (Jsonb(manifest), result_id))
 
-    def read_bytes(self, key):
-        source = self.objects.get_object(self.settings.bucket, key)
+    def read_bytes(self, key, offset=0, length=0):
+        source = self.objects.get_object(self.settings.bucket, key, offset=offset, length=length)
         try:
             return source.read()
         finally:
@@ -185,9 +191,12 @@ class Store:
         if "blocks" not in spec:
             tracks = json.loads(self.read_bytes(row["object_key"]))["satellites"]
             return next(t["samples"] for t in tracks if t["satellite_id"] == spec["satellite_id"])
+        packed = memoryview(self.read_bytes(spec["pack_key"])) if "pack_key" in spec else None
         rows = []
         for block in spec["blocks"]:
-            for t, x, y, z in decode(self.read_bytes(block["key"])):
+            raw = (packed[block["offset"]:block["offset"] + block["length"]] if packed is not None
+                   else self.read_bytes(block["key"]))
+            for t, x, y, z in decode(raw):
                 rows.append([block["start"] + t, x, y, z])
         return rows
 
