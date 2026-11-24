@@ -134,7 +134,13 @@ def job(job_id: UUID, request: Request):
 
 @app.get(PREFIX + "/tracks")
 def results(request: Request):
-    return dict(results=request.app.state.service.store.list_results())
+    rows = request.app.state.service.store.list_results()
+    for row in rows:
+        for satellite in (row["manifest"] or {}).get("satellites", []):
+            # History only displays summary metadata. Loading an entry fetches its full manifest.
+            satellite.pop("overview", None)
+            satellite.pop("blocks", None)
+    return dict(results=rows)
 
 @app.get(PREFIX + "/tracks/{result_id}")
 def manifest(result_id: UUID, request: Request):

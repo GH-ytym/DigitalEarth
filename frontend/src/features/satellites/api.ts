@@ -1,5 +1,5 @@
-import { decodeOrbit } from './orbitCodec.ts';
-import type { SavedTrack, SatelliteCatalog, SatelliteJob, SatelliteManifest, SatelliteModelResolution, SatelliteSamples } from './types';
+import { decodePackedOrbit } from './orbitCodec.ts';
+import type { OrbitChunk, ReceiveChunk, SatelliteModel, SavedTrack, SatelliteCatalog, SatelliteJob, SatelliteManifest, SatelliteModelResolution, SatelliteSamples } from './types';
 
 export const satelliteApi = '/api/v1/satellites';
 function object(value: unknown): value is Record<string, unknown> {
@@ -48,7 +48,9 @@ export function isManifest(value: unknown): value is SatelliteManifest {
       value.samples_url !== `${satelliteApi}/tracks/${value.result_id}/samples`) return false;
   if (!Array.isArray(value.satellites) || value.satellites.length < 1 || value.satellites.length > 3) return false;
   const satellites = value.satellites;
-  return satellites.every(sat => object(sat) && typeof sat.satellite_id === 'string' &&
+  return satellites.every(sat => object(sat) &&
+    (sat.overview === undefined || (Array.isArray(sat.overview) && sat.overview.length >= 6 &&
+      sat.overview.length <= 2163 && sat.overview.length % 3 === 0 && sat.overview.every(Number.isFinite))) && typeof sat.satellite_id === 'string' &&
     /^norad-\d+$/.test(sat.satellite_id) && Number.isSafeInteger(sat.norad_id) &&
     typeof sat.display_name === 'string' && typeof sat.object_name === 'string' &&
     Number.isSafeInteger(sat.sample_count) && (sat.sample_count as number) >= 2 && (sat.sample_count as number) <= 20000 &&
@@ -100,7 +102,7 @@ export async function satelliteJSON<T>(path: string, signal: AbortSignal, body?:
   }
 }
 
-export async function loadSavedTrack(id: string, signal: AbortSignal) {
+export async function loadSavedTrack(id: string, signal: AbortSignal, receive: ReceiveChunk) {
   const manifest = await satelliteJSON<unknown>(`${satelliteApi}/tracks/${id}`, signal);
   if (!isManifest(manifest)) throw new Error('卫星成果说明格式异常。');
   const models = (async () => {
@@ -117,11 +119,10 @@ export async function loadSavedTrack(id: string, signal: AbortSignal) {
     }
     return response.models;
   })();
-  const [samples, resolvedModels] = await Promise.all([loadBinarySamples(manifest, signal), models]);
-  if (!isSamples(samples, manifest)) throw new Error('卫星轨迹采样格式异常。');
-  return { manifest, samples, models: resolvedModels };
+  await streamTracks(manifest, signal, models, receive);
+  return { manifest, models: await models };
 }
-export async function loadSelectedTrack(ids: number[], signal: AbortSignal) {
+export async function loadSelectedTrack(ids: number[], signal: AbortSignal, receive: ReceiveChunk) {
   const submitted = await satelliteJSON<SatelliteJob>(`${satelliteApi}/tracks`, signal, { norad_ids: ids });
   let job = submitted;
   const deadline = performance.now() + 120000;
@@ -136,7 +137,7 @@ export async function loadSelectedTrack(ids: number[], signal: AbortSignal) {
     job = await satelliteJSON<SatelliteJob>(`${satelliteApi}/jobs/${job.job_id}`, signal);
   }
   if (job.status !== 'succeeded') throw new Error(job.error || '卫星轨迹生成失败。');
-  return { ...await loadSavedTrack(job.result_id, signal), reused: !!submitted.cache_hit };
+  return { ...await loadSavedTrack(job.result_id, signal, receive), reused: !!submitted.cache_hit };
 }
 export async function readCatalog(signal: AbortSignal, refresh = false): Promise<SatelliteCatalog> {
   const catalog = await satelliteJSON<SatelliteCatalog>(`${satelliteApi}/${refresh ? 'refresh' : 'catalog'}`, signal, refresh ? {} : undefined);
@@ -154,25 +155,63 @@ export async function readHistory(signal: AbortSignal): Promise<SavedTrack[]> {
   return data.results.filter(row => row.status === 'succeeded' && isManifest(row.manifest));
 }
 
-async function loadBinarySamples(manifest: SatelliteManifest, signal: AbortSignal): Promise<SatelliteSamples> {
-  const satellites = await Promise.all(manifest.satellites.map(async sat => {
-    if ('blocks' in sat && Array.isArray(sat.blocks)) {
-      const samples: number[][] = [];
-      for (const block of sat.blocks) {
+async function streamTracks(manifest: SatelliteManifest, signal: AbortSignal,
+  models: Promise<SatelliteModel[]>, receive: ReceiveChunk) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal.addEventListener('abort', abort, { once: true });
+  if (signal.aborted) abort();
+  const step = manifest.output_step_s;
+  try {
+    // One worker per selected satellite (the manifest permits at most three).
+    await Promise.all([models, ...manifest.satellites.map(async satellite => {
+      let count = 0;
+      const parts = satellite.blocks?.map(block => {
         const match = /^orbit-blocks\/(\d+)\/([0-9a-f]{64})\.orb$/.exec(block.key);
-        if (!match || Number(match[1]) !== sat.norad_id || block.start !== samples.length * manifest.output_step_s)
-          throw new Error('轨迹分块索引无效');
-        const response = await fetch(`${satelliteApi}/blocks/${match[1]}/${match[2]}`, { signal });
-        if (!response.ok) throw new Error('轨迹分块加载失败');
-        const rows = decodeOrbit(await response.arrayBuffer());
-        if (rows.length !== block.count) throw new Error('轨迹分块长度错误');
-        for (const row of rows) { row[0] += block.start; samples.push(row); }
+        if (!match || Number(match[1]) !== satellite.norad_id || block.start !== count * step ||
+            !Number.isSafeInteger(block.count) || block.count <= 0) throw new Error('轨迹分块索引无效');
+        count += block.count;
+        return { first: block.start / step, count: block.count, url: `${satelliteApi}/blocks/${match[1]}/${match[2]}` };
+      });
+      if (parts && count !== satellite.sample_count) throw new Error('轨迹分块总长度错误');
+      const pending = parts ?? [{ first: 0, count: satellite.sample_count,
+        url: `${satelliteApi}/tracks/${manifest.result_id}/binary/${satellite.norad_id}` }];
+      type Part = typeof pending[number];
+      async function read(part: Part, requestSignal: AbortSignal): Promise<OrbitChunk> {
+        const response = await fetch(part.url, {signal: requestSignal});
+        if (!response.ok) throw new Error('轨迹包加载失败');
+        const packet = decodePackedOrbit(await response.arrayBuffer());
+        if (packet.start !== 0 || packet.step !== step || packet.xyz.length !== part.count * 3)
+          throw new Error('轨迹采样范围错误');
+        return { satellite, first: part.first, xyz: packet.xyz };
       }
-      return { satellite_id: sat.satellite_id, samples };
-    }
-    const response = await fetch(`${satelliteApi}/tracks/${manifest.result_id}/binary/${sat.norad_id}`, { signal });
-    if (!response.ok) throw new Error('轨迹包加载失败');
-    return { satellite_id: sat.satellite_id, samples: decodeOrbit(await response.arrayBuffer()) };
-  }));
-  return { schema_version: 'satellite-samples-1', result_id: manifest.result_id, satellites };
+      const first = await read(pending.shift()!, controller.signal);
+      const resolved = await models;
+      controller.signal.throwIfAborted();
+      if (satellite.overview) {
+        // Serve the current point first, then the trail and the next interpolation samples.
+        first.nextWindow = (seconds, ahead, requestSignal) => {
+          const sample = seconds / step;
+          let index = pending.findIndex(p => p.first <= sample && sample < p.first + p.count);
+          if (index < 0) index = pending.findIndex(p =>
+            p.first <= sample + ahead / step + 1 && p.first + p.count > sample - 900 / step);
+          if (index < 0) return;
+          const [part] = pending.splice(index, 1);
+          return read(part, requestSignal).catch(error => { pending.push(part); throw error; });
+        };
+      }
+      let elapsed = receive(manifest, first, resolved) ?? 0;
+      // Without a saved overview, progressively build the whole orbit from legacy data.
+      while (!satellite.overview && pending.length) {
+        const target = elapsed / step;
+        const index = pending.findIndex(p => p.first <= target && target < p.first + p.count);
+        const chunk = await read(pending.splice(Math.max(0, index), 1)[0], controller.signal);
+        controller.signal.throwIfAborted();
+        elapsed = receive(manifest, chunk, resolved) ?? 0;
+      }
+    })]);
+  } finally {
+    abort();
+    signal.removeEventListener('abort', abort);
+  }
 }

@@ -25,7 +25,7 @@ import {
 import { sceneConfig } from '../../config/scene';
 import { provinceBoundary } from '../../config/mapServices';
 import { SatellitePlayback } from '../satellites/SatellitePlayback';
-import type { SatelliteManifest, SatelliteModel, SatelliteSamples } from '../satellites/types';
+import type { SatelliteManifest, SatelliteModel, OrbitChunk } from '../satellites/types';
 import { MapLabels } from '../mapLabels/MapLabels';
 import { WorkspaceScene } from '../mapWorkspace/WorkspaceScene';
 import { geodesicPath } from '../mapWorkspace/distance';
@@ -576,7 +576,7 @@ export class SceneController {
     this.viewer.scene.requestRender();
   }
 
-  loadSatellites(manifest: SatelliteManifest, samples: SatelliteSamples, models: SatelliteModel[]) { this.satellitePlayback.load(manifest, samples, models); }
+  loadSatellites(manifest: SatelliteManifest, samples: OrbitChunk, models: SatelliteModel[]) { return this.satellitePlayback.load(manifest, samples, models); }
   playSatellites(enabled: boolean) { this.satellitePlayback.play(enabled); }
   seekSatellites(seconds: number) { this.satellitePlayback.seek(seconds); }
   speedSatellites(speed: number) { this.satellitePlayback.speed(speed); }

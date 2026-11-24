@@ -1,10 +1,11 @@
 import {
   ArcType, Cartesian2, Cartesian3, Cartographic, ClockRange, ClockStep, Color, CustomDataSource,
-  HeightReference, JulianDate, LabelStyle, LinearApproximation, Math as CesiumMath, ReferenceFrame,
-  SampledPositionProperty, TimeInterval, TimeIntervalCollection, TrackingReferenceFrame, VelocityOrientationProperty,
+  CallbackPositionProperty, ColorGeometryInstanceAttribute, GeometryInstance, PolylineColorAppearance,
+  PolylineGeometry, Primitive, HeightReference, JulianDate, LabelStyle, Math as CesiumMath, ReferenceFrame,
+  TimeInterval, TimeIntervalCollection, TrackingReferenceFrame, VelocityOrientationProperty,
 } from 'cesium';
 import type { Entity, Viewer } from 'cesium';
-import type { SatelliteManifest, SatelliteModel, SatellitePlaybackState, SatelliteSamples } from './types';
+import type { SatelliteManifest, SatelliteModel, SatellitePlaybackState, OrbitChunk } from './types';
 import { subsatellitePosition } from './subsatellitePosition';
 import { earthRadius, orbitFollowRange, orbitViewDistance } from './orbitView';
 import { satellitePlaybackSpeeds } from './types';
@@ -14,6 +15,12 @@ const colors = ['#80D9FA', '#FFBD7B', '#C5B1FF'];
 /** Uses the workspace's existing Viewer; owns only satellite entities and their clock listener. */
 export class SatellitePlayback {
   private source = new CustomDataSource('public-satellites');
+  private windowController = new AbortController();
+  private readers = new Map<string, NonNullable<OrbitChunk['nextWindow']>>();
+  private loading = new Set<string>();
+  private errors = new Map<string, string>();
+  private lines: Primitive[] = [];
+  private buffers = new Map<string, {xyz: Float64Array; loaded: Uint8Array}>();
   private entities: Entity[] = [];
   private orbitRadius = earthRadius;
   private orbitBounds = new Map<string, { min: number; max: number }>();
@@ -32,38 +39,68 @@ export class SatellitePlayback {
     this.removeTick = viewer.clock.onTick.addEventListener(() => this.tick());
   }
 
-  load(manifest: SatelliteManifest, samples: SatelliteSamples, models: SatelliteModel[]) {
-    const byNorad = new Map(models.map(model => [model.norad_id, model]));
-    if (byNorad.size !== manifest.satellites.length || manifest.satellites.some(sat => !byNorad.has(sat.norad_id))) {
-      throw new Error('卫星模型配置不完整，当前场景已保留。');
+  load(manifest: SatelliteManifest, chunk: OrbitChunk, models: SatelliteModel[]) {
+    if (this.disposed) return;
+    const newReplay = manifest !== this.manifest;
+    if (newReplay) {
+      this.clear(false);
+      this.manifest = manifest;
+      this.models = models;
+      this.epoch = JulianDate.fromIso8601(manifest.epoch_utc);
     }
-    this.clear(false);
-    this.manifest = manifest;
-    this.models = models;
-    this.epoch = JulianDate.fromIso8601(manifest.epoch_utc);
-    samples.satellites.forEach((track, index) => {
-      const spec = manifest.satellites.find(sat => sat.satellite_id === track.satellite_id)!;
-      const model = byNorad.get(spec.norad_id)!;
-      const color = Color.fromCssColorString(colors[index]);
-      const position = new SampledPositionProperty(ReferenceFrame.FIXED);
-      position.addSamplesPackedArray(track.samples.flat(), this.epoch);
-      position.setInterpolationOptions({ interpolationAlgorithm: LinearApproximation, interpolationDegree: 1 });
-      const bounds = { min: Infinity, max: 0 };
-      for (const [, x, y, z] of track.samples) {
-        const radius = Math.hypot(x, y, z);
-        bounds.min = Math.min(bounds.min, radius);
-        bounds.max = Math.max(bounds.max, radius);
-      }
-      this.orbitBounds.set(track.satellite_id, bounds);
-      this.orbitRadius = Math.max(this.orbitRadius, bounds.max);
+    const spec = chunk.satellite;
+    const id = spec.satellite_id;
+    const color = Color.fromCssColorString(colors[manifest.satellites.indexOf(spec)]);
+    let buffer = this.buffers.get(id);
+    const firstChunk = !buffer;
+    if (chunk.nextWindow) this.readers.set(id, chunk.nextWindow);
+    if (!buffer) {
+      buffer = {xyz: new Float64Array(spec.sample_count * 3), loaded: new Uint8Array(spec.sample_count)};
+      this.buffers.set(id, buffer);
+    }
+    const {xyz, loaded} = buffer;
+    const end = chunk.first + chunk.xyz.length / 3;
+    xyz.set(chunk.xyz, chunk.first * 3);
+    loaded.fill(1, chunk.first, end);
+    const overview = spec.overview;
+    const bounds = this.orbitBounds.get(id) ?? {min: Infinity, max: 0};
+    const coordinates = firstChunk && overview ? overview : chunk.xyz;
+    for (let i = 0; i < coordinates.length; i += 3) {
+      const radius = Math.hypot(coordinates[i], coordinates[i+1], coordinates[i+2]);
+      bounds.min = Math.min(bounds.min, radius);
+      bounds.max = Math.max(bounds.max, radius);
+    }
+    this.orbitBounds.set(id, bounds);
+    const expandView = firstChunk && this.orbitRadius * 1.1 < bounds.max;
+    this.orbitRadius = Math.max(this.orbitRadius, bounds.max);
+    if (firstChunk && overview) {
+      this.addLine(id, Cartesian3.unpackArray(overview), color);
+    } else if (!overview) {
+      // Older manifests have no overview. Join already loaded neighbours at hour boundaries.
+      const first = Math.max(0, chunk.first - (loaded[chunk.first-1] ? 1 : 0));
+      const last = end - 1 + (loaded[end] ? 1 : 0);
+      const stride = Math.max(1, Math.ceil(spec.sample_count / 720));
+      const point = (i: number) => new Cartesian3(xyz[3*i], xyz[3*i+1], xyz[3*i+2]);
+      const positions = [];
+      for (let i = first; i < last; i += stride) positions.push(point(i));
+      positions.push(point(last));
+      this.addLine(id, positions, color);
+    }
+    if (firstChunk) {
+      const model = models.find(m => m.norad_id === spec.norad_id)!;
+      const position = new CallbackPositionProperty((time, result) => {
+        const t = JulianDate.secondsDifference(time!, this.epoch) / manifest.output_step_s;
+        if (t < 0 || t > spec.sample_count - 1) return undefined;
+        const i = Math.floor(t), j = Math.ceil(t);
+        if (!loaded[i] || !loaded[j]) return undefined;
+        const f = t-i, a = 3*i, b = 3*j;
+        return Cartesian3.fromElements(xyz[a]+f*(xyz[b]-xyz[a]), xyz[a+1]+f*(xyz[b+1]-xyz[a+1]),
+          xyz[a+2]+f*(xyz[b+2]-xyz[a+2]), result);
+      }, false, ReferenceFrame.FIXED);
       const availability = new TimeIntervalCollection([new TimeInterval({
         start: this.epoch, stop: JulianDate.fromIso8601(manifest.stop_utc),
       })]);
-      this.source.entities.add({ id: `${track.satellite_id}-orbit`, polyline: {
-        positions: track.samples.map(([, x, y, z]) => new Cartesian3(x, y, z)),
-        arcType: ArcType.NONE, width: 1.3, material: color.withAlpha(0.5),
-      } });
-      this.entities.push(this.source.entities.add({ id: track.satellite_id, position,
+      this.entities.push(this.source.entities.add({ id: spec.satellite_id, position,
         availability,
         // Keep a north-up Earth overview; only the view centre follows the satellite.
         trackingReferenceFrame: TrackingReferenceFrame.ENU,
@@ -77,7 +114,7 @@ export class SatellitePlayback {
           style: LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cartesian2(0, -26) },
         path: { leadTime: 0, trailTime: 900, resolution: manifest.output_step_s, width: 2.5, material: color },
       }));
-      this.source.entities.add({ id: `${track.satellite_id}-subpoint`, availability,
+      this.source.entities.add({ id: `${spec.satellite_id}-subpoint`, availability,
         position: subsatellitePosition(position),
         point: { pixelSize: 10, color, outlineColor: Color.fromCssColorString('#06162e'),
           outlineWidth: 2, heightReference: HeightReference.CLAMP_TO_GROUND },
@@ -86,18 +123,35 @@ export class SatellitePlayback {
           style: LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cartesian2(0, 18),
           heightReference: HeightReference.CLAMP_TO_GROUND },
       });
-    });
-    const clock = this.viewer.clock;
-    clock.startTime = this.epoch.clone();
-    clock.currentTime = this.epoch.clone();
-    clock.stopTime = JulianDate.fromIso8601(manifest.stop_utc);
-    clock.clockStep = ClockStep.SYSTEM_CLOCK_MULTIPLIER;
-    clock.clockRange = ClockRange.CLAMPED;
-    clock.multiplier = manifest.duration_s > 7200 ? 600 : 60;
-    clock.canAnimate = true;
-    this.focus();
-    this.play(true);
+    }
+    if (newReplay) {
+      const clock = this.viewer.clock;
+      clock.startTime = this.epoch.clone();
+      clock.currentTime = this.epoch.clone();
+      clock.stopTime = JulianDate.fromIso8601(manifest.stop_utc);
+      clock.clockStep = ClockStep.SYSTEM_CLOCK_MULTIPLIER;
+      clock.clockRange = ClockRange.CLAMPED;
+      clock.multiplier = manifest.duration_s > 7200 ? 600 : 60;
+      clock.canAnimate = true;
+      this.focus();
+      this.play(true);
+    } else if (expandView && !this.following) {
+      this.focus();
+    }
+    this.viewer.scene.requestRender();
     this.tick(true);
+    return JulianDate.secondsDifference(this.viewer.clock.currentTime, this.epoch);
+  }
+
+  private addLine(id: string, positions: Cartesian3[], color: Color) {
+    if (positions.length < 2) return;
+    const line = new Primitive({
+      geometryInstances: new GeometryInstance({ id, geometry: new PolylineGeometry({
+        positions, width: 1.3, arcType: ArcType.NONE, vertexFormat: PolylineColorAppearance.VERTEX_FORMAT,
+      }), attributes: {color: ColorGeometryInstanceAttribute.fromColor(color.withAlpha(0.5))} }),
+      appearance: new PolylineColorAppearance({translucent: true}), asynchronous: true,
+    });
+    this.lines.push(this.viewer.scene.primitives.add(line));
   }
 
   private tick(force = false) {
@@ -109,7 +163,23 @@ export class SatellitePlayback {
       clock.shouldAnimate = false;
       this.viewer.scene.maximumRenderTimeChange = Infinity;
     }
-    this.onChange({ manifest: this.manifest, models: this.models, elapsed, currentUtc: JulianDate.toIso8601(clock.currentTime, 0),
+    const manifest = this.manifest;
+    const models = this.models;
+    const signal = this.windowController.signal;
+    for (const [id, reader] of this.readers) {
+      if (this.loading.has(id) || this.errors.has(id)) continue;
+      const request = reader(elapsed, clock.shouldAnimate ? Math.max(30, clock.multiplier) : 0, signal);
+      if (!request) continue;
+      this.loading.add(id);
+      void request.then(chunk => {
+        if (!signal.aborted) this.load(manifest, chunk, models);
+      }).catch(() => {
+        if (!signal.aborted) this.errors.set(id, '部分轨迹未能加载，可拖动时间轴重试。');
+      }).finally(() => {
+        if (!signal.aborted) { this.loading.delete(id); this.tick(true); }
+      });
+    }
+    this.onChange({ loadError: this.errors.values().next().value, manifest: this.manifest, models: this.models, elapsed, currentUtc: JulianDate.toIso8601(clock.currentTime, 0),
       playing: clock.shouldAnimate, speed: clock.multiplier, following: this.following,
       positions: this.entities.flatMap(entity => {
         const p = entity.position?.getValue(clock.currentTime);
@@ -132,6 +202,7 @@ export class SatellitePlayback {
   }
   seek(seconds: number) {
     if (!this.manifest) return;
+    this.errors.clear();
     this.play(false);
     this.viewer.clock.currentTime = JulianDate.addSeconds(this.epoch,
       Math.max(0, Math.min(seconds, this.manifest.duration_s)), new JulianDate());
@@ -190,6 +261,14 @@ export class SatellitePlayback {
     this.viewer.trackedEntity = undefined;
     this.following = null;
     this.source.entities.removeAll();
+    for (const line of this.lines) this.viewer.scene.primitives.remove(line);
+    this.lines = [];
+    this.buffers.clear();
+    this.windowController.abort();
+    this.windowController = new AbortController();
+    this.loading.clear();
+    this.readers.clear();
+    this.errors.clear();
     this.entities = [];
     this.orbitRadius = earthRadius;
     this.orbitBounds.clear();

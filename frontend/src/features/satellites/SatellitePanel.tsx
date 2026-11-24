@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { loadSavedTrack, loadSelectedTrack, readCatalog, readHistory } from './api';
-import type { SavedTrack, SatelliteCatalog, SatelliteManifest, SatelliteModel, SatellitePlaybackState, SatelliteSamples } from './types';
+import type { SavedTrack, SatelliteCatalog, SatellitePlaybackState, ReceiveChunk } from './types';
 
 export function satelliteTime(value: string) {
   return `${value.replace('T', ' ').slice(0, 19)} UTC`;
@@ -17,7 +17,7 @@ interface Props {
   active: boolean;
   playback: SatellitePlaybackState | null;
   ready: boolean;
-  onLoad: (manifest: SatelliteManifest, samples: SatelliteSamples, models: SatelliteModel[]) => void;
+  onLoad: ReceiveChunk;
   onFocus: () => void;
   onClear: () => void;
 }
@@ -74,10 +74,9 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
       } else {
         setMessage(action === 'load' ? '正在加载轨迹…' : '正在读取已保存轨迹…');
         const data = action === 'load'
-          ? await loadSelectedTrack(selected, controller.signal)
-          : await loadSavedTrack(action, controller.signal);
+          ? await loadSelectedTrack(selected, controller.signal, onLoad)
+          : await loadSavedTrack(action, controller.signal, onLoad);
         if (controller.signal.aborted) return;
-        onLoad(data.manifest, data.samples, data.models);
         setSelected(data.manifest.satellites.map(sat => sat.norad_id)
           .filter(id => catalog?.satellites.some(sat => sat.norad_id === id)).slice(0, limit));
         setMessage(action !== 'load' ? '已加载保存的轨迹。'
@@ -127,14 +126,14 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
     <button className="primary-button satellite-load" disabled={busy || !ready || !catalog || !selected.length || selected.length > limit}
       onClick={() => void act('load')}>{busy ? '正在加载…' : '加载所选卫星轨迹'}</button>
     {message && <p className="satellite-message" role="status">{message}</p>}
-    {error && <p className="satellite-error" role="alert">{error}</p>}
+    {(error || playback?.loadError) && <p className="satellite-error" role="alert">{error || playback?.loadError}</p>}
     {playback && <>
       <div className="satellite-result-info">
         <p>回放起点：{satelliteTime(playback.manifest.epoch_utc)}</p>
         <p>回放时长：{playback.manifest.duration_s / 3600} 小时</p>
         {playback.manifest.window_kind === 'historical' && <p>当前使用较旧要素对应的历史时段。</p>}
       </div>
-      <div className="satellite-actions"><button className="text-button" onClick={onFocus}>查看全部轨迹</button><button className="text-button" onClick={onClear}>卸载轨迹</button></div>
+      <div className="satellite-actions"><button className="text-button" onClick={onFocus}>查看全部轨迹</button><button className="text-button" onClick={() => { operation.current?.abort(); setBusy(false); setMessage(''); onClear(); }}>卸载轨迹</button></div>
       <details className="satellite-provenance"><summary>数据获取时间与来源</summary>
         {playback.manifest.satellites.map(sat => <p key={sat.satellite_id}>{sourceLink(sat.source_url, sat.object_name)}<br />要素：{satelliteTime(sat.element_epoch_utc)}<br />获取：{satelliteTime(sat.fetched_at)}</p>)}
         {modelSources.map(model => <div key={model.version_id}>

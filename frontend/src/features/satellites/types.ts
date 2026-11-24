@@ -25,6 +25,8 @@ export interface TrackSatellite {
   display_name: string;
   object_name: string;
   sample_count: number;
+  blocks?: Array<{ key: string; start: number; count: number }>;
+  overview?: number[];
   period_s: number;
   element_epoch_utc: string;
   fetched_at: string;
@@ -87,8 +89,17 @@ export interface SatellitePlaybackState {
   models: SatelliteModel[];
   elapsed: number;
   currentUtc: string;
+  loadError?: string;
   playing: boolean;
   speed: number;
   following: string | null;
   positions: Array<{ satellite_id: string; longitude: number; latitude: number; height: number }>;
 }
+
+export interface OrbitChunk {
+  satellite: TrackSatellite;
+  first: number;
+  xyz: Float64Array;
+  nextWindow?: (seconds: number, ahead: number, signal: AbortSignal) => Promise<OrbitChunk> | undefined;
+}
+export type ReceiveChunk = (manifest: SatelliteManifest, chunk: OrbitChunk, models: SatelliteModel[]) => number | void;

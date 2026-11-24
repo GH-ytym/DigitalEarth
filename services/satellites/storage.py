@@ -131,6 +131,10 @@ class Store:
         per_hour = 3600 // step
         for spec, track in zip(manifest["satellites"], samples["satellites"], strict=True):
             rows = track["samples"]
+            # Overview only; playback still uses every original sample in the hour blocks.
+            stride = max(1, (len(rows) - 1 + 719) // 720)
+            overview = rows[:-1:stride] + [rows[-1]]
+            spec["overview"] = [coordinate for point in overview for coordinate in point[1:]]
             blocks = []
             for first in range(0, len(rows) - 1, per_hour):
                 # Keep the final endpoint in the last hour, without duplicating boundaries.

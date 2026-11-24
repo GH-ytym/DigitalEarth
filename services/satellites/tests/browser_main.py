@@ -85,6 +85,19 @@ with sync_playwright() as playwright:
       const moduleUrl = performance.getEntriesByType('resource')
         .find(e => new URL(e.name).pathname === '/src/features/globe/SceneController.ts').name;
       const { SceneController } = await import(moduleUrl);
+      const playbackUrl = performance.getEntriesByType('resource')
+        .find(e => new URL(e.name).pathname === '/src/features/satellites/SatellitePlayback.ts').name;
+      const { SatellitePlayback } = await import(playbackUrl);
+      const addLine = SatellitePlayback.prototype.addLine;
+      const clear = SatellitePlayback.prototype.clear;
+      SatellitePlayback.prototype.clear = function(...args) {
+        window.__testOrbitPoints = [];
+        return clear.apply(this, args);
+      };
+      SatellitePlayback.prototype.addLine = function(id, positions, color) {
+        window.__testOrbitPoints.push(...positions);
+        return addLine.call(this, id, positions, color);
+      };
       const load = SceneController.prototype.loadSatellites;
       SceneController.prototype.loadSatellites = function(...args) {
         window.__testViewer = this.viewer;
@@ -266,12 +279,10 @@ with sync_playwright() as playwright:
         framing = page.evaluate("""() => {
           const v = window.__testViewer;
           let outside = 0;
-          for (const e of v.dataSources.getByName('public-satellites')[0].entities.values) {
-            if (!e.polyline) continue;
-            for (const p of e.polyline.positions.getValue(v.clock.currentTime)) {
-              const s = v.scene.cartesianToCanvasCoordinates(p);
-              if (!s || s.x<0 || s.y<0 || s.x>v.scene.canvas.clientWidth || s.y>v.scene.canvas.clientHeight) outside++;
-            }
+          if (!window.__testOrbitPoints?.length) throw Error('Missing static orbit geometry');
+          for (const p of window.__testOrbitPoints) {
+            const s = v.scene.cartesianToCanvasCoordinates(p);
+            if (!s || s.x<0 || s.y<0 || s.x>v.scene.canvas.clientWidth || s.y>v.scene.canvas.clientHeight) outside++;
           }
           return {outside, height:v.camera.positionCartographic.height,
             duration:window.__testManifest.duration_s,step:window.__testManifest.output_step_s};
