@@ -153,8 +153,8 @@ class PipelineTests(unittest.TestCase):
 
     def test_navigation_and_geostationary_full_tracks(self):
         with TestClient(app) as client:
-            cases = [([36585,37846,43001],86400,30), ([48808,25994,49260],7200,10),
-                     ([25544,36585],86400,10), ([48808,37846],86400,30)]
+            cases = [([36585,37846,43001],86400,10), ([48808,25994,49260],7200,10),
+                     ([25544,36585],86400,10), ([48808,37846],86400,10)]
             for ids, duration, step in cases:
                 job = client.post("/api/v1/satellites/tracks", json={"norad_ids":ids}).json()
                 deadline = time.monotonic() + 20
@@ -168,6 +168,7 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual({sat["norad_id"] for sat in manifest["satellites"]}, set(ids))
                 self.assertEqual(manifest["duration_s"], duration)
                 self.assertEqual(manifest["output_step_s"], step)
+                self.assertTrue(all(s["display_step_s"] == step for s in manifest["satellites"]))
                 self.assertEqual((utc(manifest["stop_utc"])-utc(manifest["epoch_utc"])).total_seconds(), duration)
                 self.assertTrue(all(len(track["samples"]) == duration//step+1 for track in data["satellites"]))
                 self.assertTrue(all(track["samples"][-1][0] == duration for track in data["satellites"]))

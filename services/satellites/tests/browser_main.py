@@ -265,7 +265,7 @@ with sync_playwright() as playwright:
     page.unroute(failure_route)
     # Each orbital scale must be framed automatically, without a manual zoom-out.
     for label, ids, duration, step, target in (
-        ("meo", [36585,37846,43001],86400,30,36585),
+        ("meo", [36585,37846,43001],86400,10,36585),
         ("geo", [48808],7200,10,48808),
         ("mixed", [25544,36585],86400,10,36585),
     ):
@@ -307,10 +307,11 @@ with sync_playwright() as playwright:
         assert_overview(tracking_snapshot(page), f"norad-{target}", tracked_zoom["distance"])
         page.get_by_role("button", name="查看全部轨迹", exact=True).click()
         page.wait_for_timeout(1000)
-    # Restoring a persisted result after a full page reload reconstructs the same scene.
+    # After reload, tracks are loaded directly from the current selection.
     page.reload(wait_until="domcontentloaded")
-    expect(page.locator(".satellite-history button").first).to_be_visible(timeout=60000)
-    page.locator(".satellite-history button").first.click()
+    expect(load).to_be_enabled(timeout=60000)
+    expect(page.get_by_role("heading", name="已保存轨迹")).to_have_count(0)
+    load.click()
     expect(toggle).to_be_enabled(timeout=30000)
     expect(controls).to_have_count(0)
     toggle.click()
@@ -318,7 +319,7 @@ with sync_playwright() as playwright:
     restored_count = page.get_by_label("跟随卫星", exact=True).locator("option").count() - 1
     assert 1 <= restored_count <= 3
     expect(load).to_be_enabled()
-    expect(page.locator(".satellite-message").filter(has_text="已加载保存的轨迹")).to_be_visible()
+    expect(page.locator(".satellite-message").filter(has_text="轨迹")).to_be_visible()
     expect(page.locator(".scene-status")).to_have_text("场景就绪", timeout=60000)
     page.set_viewport_size({"width":1000,"height":760})
     page.wait_for_timeout(2500)

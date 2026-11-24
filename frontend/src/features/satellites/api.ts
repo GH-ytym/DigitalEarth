@@ -1,5 +1,6 @@
+import { loadFixedOrbit } from './fixedOrbit.ts';
 import { decodePackedOrbit } from './orbitCodec.ts';
-import type { OrbitChunk, ReceiveChunk, SatelliteModel, SavedTrack, SatelliteCatalog, SatelliteJob, SatelliteManifest, SatelliteModelResolution, SatelliteSamples } from './types';
+import type { OrbitChunk, ReceiveChunk, SatelliteModel, SatelliteCatalog, SatelliteJob, SatelliteManifest, SatelliteModelResolution, SatelliteSamples } from './types';
 
 export const satelliteApi = '/api/v1/satellites';
 function object(value: unknown): value is Record<string, unknown> {
@@ -149,12 +150,6 @@ export async function readCatalog(signal: AbortSignal, refresh = false): Promise
   }
   return catalog;
 }
-export async function readHistory(signal: AbortSignal): Promise<SavedTrack[]> {
-  const data = await satelliteJSON<{ results: SavedTrack[] }>(`${satelliteApi}/tracks`, signal);
-  if (!Array.isArray(data.results)) throw new Error('轨迹列表格式异常。');
-  return data.results.filter(row => row.status === 'succeeded' && isManifest(row.manifest));
-}
-
 async function streamTracks(manifest: SatelliteManifest, signal: AbortSignal,
   models: Promise<SatelliteModel[]>, receive: ReceiveChunk) {
   const controller = new AbortController();
@@ -168,6 +163,16 @@ async function streamTracks(manifest: SatelliteManifest, signal: AbortSignal,
       const pack = satellite.pack_key?.match(/^orbit-packs\/(\d+)\/([0-9a-f]{64})\.orb$/);
       if (satellite.pack_key !== undefined && (!pack || Number(pack[1]) !== satellite.norad_id))
         throw new Error('轨迹对象索引无效');
+      if (satellite.format === 'ORF1') {
+        if (!pack || !Number.isSafeInteger(satellite.source_epoch)) throw new Error('单星轨迹索引无效');
+        const fixed = await loadFixedOrbit(`${satelliteApi}/packs/${pack[1]}/${pack[2]}`, pack[2],
+          satellite.source_epoch!, Date.parse(manifest.epoch_utc) / 1000, manifest.duration_s,
+          satellite.display_step_s!, controller.signal);
+        const resolved = await models;
+        controller.signal.throwIfAborted();
+        receive(manifest, {satellite, first: 0, xyz: new Float64Array(0), fixed}, resolved);
+        return;
+      }
       let offset = 0;
       const parts = satellite.blocks?.map(block => {
         if (block.start !== count * step || !Number.isSafeInteger(block.count) || block.count <= 0)
@@ -209,8 +214,12 @@ async function streamTracks(manifest: SatelliteManifest, signal: AbortSignal,
           if (index < 0) index = pending.findIndex(p =>
             p.first <= sample + ahead / step + 1 && p.first + p.count > sample - 900 / step);
           if (index < 0) return;
-          const [part] = pending.splice(index, 1);
-          return read(part, requestSignal).catch(error => { pending.push(part); throw error; });
+          const part = pending[index];
+          return read(part, requestSignal).then(chunk => {
+            requestSignal.throwIfAborted();
+            pending.splice(pending.indexOf(part), 1);
+            return chunk;
+          });
         };
       }
       let elapsed = receive(manifest, first, resolved) ?? 0;
@@ -227,7 +236,8 @@ async function streamTracks(manifest: SatelliteManifest, signal: AbortSignal,
     async function worker() {
       while (next < manifest.satellites.length) await loadSatellite(manifest.satellites[next++]);
     }
-    await Promise.all([models, ...Array.from({length: Math.min(3, manifest.satellites.length)}, worker)]);
+    const concurrency = manifest.satellites.every(s => s.format === 'ORF1') ? 6 : 3;
+    await Promise.all([models, ...Array.from({length: Math.min(concurrency, manifest.satellites.length)}, worker)]);
   } finally {
     abort();
     signal.removeEventListener('abort', abort);

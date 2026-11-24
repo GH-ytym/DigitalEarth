@@ -2,7 +2,8 @@
 import re
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
-from orbit_codec import encode, decode
+from orbit_codec import encode, decode, encode_fixed, fixed_window, SOURCE_DURATION
+from datetime import datetime
 from io import BytesIO
 import json
 from uuid import uuid4
@@ -38,6 +39,9 @@ class Store:
                 created_at timestamptz NOT NULL DEFAULT now(),
                 updated_at timestamptz NOT NULL DEFAULT now()
             )""")
+            conn.execute("""CREATE TABLE IF NOT EXISTS satellite_fixed_sources (
+                identity text NOT NULL, epoch bigint NOT NULL, pack_key text NOT NULL,
+                PRIMARY KEY(identity, epoch))""")
             # One Uvicorn process only. Interrupted requests are explicitly retryable.
             conn.execute("""UPDATE satellite_results SET status='failed',
                 error='API restarted before this calculation completed.', updated_at=now()
@@ -73,6 +77,8 @@ class Store:
                     conn.execute("""UPDATE satellite_results SET status='failed', object_key=NULL,
                                  manifest=NULL, error='Missing orbit object; resubmit to regenerate.',
                                  updated_at=now() WHERE result_id=%s""", (row["result_id"],))
+            conn.execute("DELETE FROM satellite_fixed_sources WHERE NOT (pack_key = ANY(%s::text[]))",
+                         (list(referenced),))
             for key in existing - referenced:
                 self.objects.remove_object(self.settings.bucket, key)
 
@@ -109,19 +115,13 @@ class Store:
             return conn.execute("""SELECT result_id,job_id,status,request,manifest,error,created_at
                 FROM satellite_results ORDER BY created_at DESC LIMIT 30""").fetchall()
 
-    def reusable_track(self, key, request, entry, engine, dll, frame):
-        # Match older block manifests by the same inputs used to derive the single-star key.
+    def fixed_sources(self, identities, epoch, duration):
         with self.connect() as conn:
-            row = conn.execute("""SELECT sat FROM satellite_results r,
-                jsonb_array_elements(manifest->'satellites') sat
-                WHERE status='succeeded' AND sat ? 'overview' AND sat ? 'pack_key' AND
-                (sat->>'sample_key'=%s OR (sat->>'norad_id'=%s AND
-                 manifest->>'engine_version'=%s AND manifest->>'dll_fingerprint'=%s AND manifest->>'frame_version'=%s
-                 AND r.request @> %s)) LIMIT 1""",
-                (key, str(entry["norad_id"]), engine, dll, frame, Jsonb(dict(epoch_utc=request["epoch_utc"],
-                 duration_s=request["duration_s"], output_step_s=request["output_step_s"],
-                 elements=[dict(norad_id=entry["norad_id"], fingerprint=entry["fingerprint"])])))).fetchone()
-            return row["sat"] if row else None
+            rows = conn.execute("""SELECT DISTINCT ON (identity) identity, epoch, pack_key
+                FROM satellite_fixed_sources WHERE identity = ANY(%s) AND epoch <= %s AND epoch >= %s
+                ORDER BY identity, epoch DESC""",
+                (identities, epoch, epoch + duration - SOURCE_DURATION)).fetchall()
+        return {row["identity"]: row for row in rows}
 
     def mark_running(self, result_id):
         with self.connect() as conn:
@@ -152,6 +152,17 @@ class Store:
                 if track is None:  # Already published immutable blocks shared by another result.
                     continue
                 rows = track["samples"]
+                if spec.get("format") == "ORF1":
+                    raw = encode_fixed(rows, spec["source_epoch"])
+                    digest = sha256(raw).hexdigest()
+                    key = f"orbit-packs/{spec['norad_id']}/{digest}.orb"
+                    spec["pack_key"] = key
+                    uploads.append(pool.submit(self.objects.put_object, self.settings.bucket, key,
+                                               BytesIO(raw), len(raw), content_type="application/octet-stream"))
+                    conn.execute("""INSERT INTO satellite_fixed_sources VALUES (%s,%s,%s)
+                        ON CONFLICT(identity,epoch) DO UPDATE SET pack_key=EXCLUDED.pack_key""",
+                        (spec["sample_key"], spec["source_epoch"], key))
+                    continue
                 # Overview only; playback still uses every original sample in the hour blocks.
                 stride = max(1, (len(rows) - 1 + 719) // 720)
                 overview = rows[:-1:stride] + [rows[-1]]
@@ -188,6 +199,11 @@ class Store:
             source.release_conn()
 
     def read_track(self, row, spec):
+        if spec.get("format") == "ORF1":
+            manifest = row["manifest"]
+            epoch = int(datetime.fromisoformat(manifest["epoch_utc"].replace("Z", "+00:00")).timestamp())
+            return fixed_window(self.read_bytes(spec["pack_key"]), epoch,
+                                manifest["duration_s"], manifest["output_step_s"])
         if "blocks" not in spec:
             tracks = json.loads(self.read_bytes(row["object_key"]))["satellites"]
             return next(t["samples"] for t in tracks if t["satellite_id"] == spec["satellite_id"])

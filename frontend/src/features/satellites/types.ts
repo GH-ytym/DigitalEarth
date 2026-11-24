@@ -1,3 +1,4 @@
+import type { FixedOrbit } from './fixedOrbit';
 export const satellitePlaybackSpeeds = [1, 30, 60, 120, 300, 600, 1200, 3600] as const;
 
 export interface SatelliteEntry {
@@ -26,6 +27,9 @@ export interface TrackSatellite {
   object_name: string;
   sample_count: number;
   pack_key?: string;
+  format?: "ORF1";
+  source_epoch?: number;
+  display_step_s?: number;
   blocks?: Array<{ key?: string; offset?: number; length?: number; start: number; count: number }>;
   overview?: number[];
   period_s: number;
@@ -79,12 +83,6 @@ export interface SatelliteJob {
   result_url: string;
   cache_hit?: boolean;
 }
-export interface SavedTrack {
-  result_id: string;
-  status: string;
-  manifest: SatelliteManifest | null;
-  created_at: string;
-}
 export interface SatellitePlaybackState {
   manifest: SatelliteManifest;
   models: SatelliteModel[];
@@ -98,6 +96,7 @@ export interface SatellitePlaybackState {
 }
 
 export interface OrbitChunk {
+  fixed?: FixedOrbit;
   satellite: TrackSatellite;
   first: number;
   xyz: Float64Array;

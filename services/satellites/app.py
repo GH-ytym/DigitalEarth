@@ -25,7 +25,7 @@ class TrackRequest(BaseModel):
 
 class ModelResolveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    norad_ids: list[int] = Field(min_length=1, max_length=MAX_SELECTED)
+    norad_ids: list[int] = Field(min_length=1)
 
     @model_validator(mode="after")
     def valid_ids(self):

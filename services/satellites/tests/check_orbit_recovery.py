@@ -65,6 +65,22 @@ def run():
         store.mark_running(retry["result_id"])
         publish(retry["result_id"], 0)
         assert store.get(first)["status"] == "succeeded"
+        fixed = job("fixed")
+        epoch = 1700000000
+        spec = dict(norad_id=1, satellite_id="norad-1", format="ORF1", sample_key="source", source_epoch=epoch)
+        rows = [[t, -t, t + 0.14, 42164000] for t in range(0, 86401, 10)]
+        manifest = dict(output_step_s=10, satellites=[spec])
+        store.save(fixed, {"satellites": [{"samples": rows}]}, manifest)
+        assert store.fixed_sources(["source"], epoch + 64800, 300)["source"]["pack_key"] == spec["pack_key"]
+        assert not store.fixed_sources(["source"], epoch + 10, 86400)
+        from orbit_codec import fixed_window
+        raw = store.read_bytes(spec["pack_key"])
+        assert len(raw) == 103712
+        assert fixed_window(raw, epoch + 64800, 300, 30)[1] == [30, -64830, 64830.1, 42164000]
+        store.objects.remove_object(settings.bucket, spec["pack_key"])
+        store.initialize()
+        assert not store.fixed_sources(["source"], epoch, 7200)
+        assert store.get(fixed)["status"] == "failed"
         print("PASS: shared blocks, interrupted PUT, missing object, restart, retry")
     finally:
         if previous is None:

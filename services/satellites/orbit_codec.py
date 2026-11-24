@@ -52,3 +52,39 @@ def decode(raw):
     if offset != len(raw):
         raise ValueError("Unexpected trailing orbit data")
     return rows
+
+
+# ORF1 has a 20-byte header followed by 12-byte ECEF decimetre records.
+FIXED_HEADER = struct.Struct("<4sIqI")
+FIXED_POINT = struct.Struct("<iii")
+SOURCE_STEP = 10
+SOURCE_DURATION = 86400
+
+
+def encode_fixed(rows, epoch):
+    if len(rows) != SOURCE_DURATION // SOURCE_STEP + 1:
+        raise ValueError("Incomplete fixed orbit source")
+    raw = bytearray(FIXED_HEADER.size + len(rows) * FIXED_POINT.size)
+    FIXED_HEADER.pack_into(raw, 0, b"ORF1", len(rows), epoch, SOURCE_STEP)
+    for i, (dt, x, y, z) in enumerate(rows):
+        if dt != i * SOURCE_STEP:
+            raise ValueError("Irregular fixed orbit samples")
+        FIXED_POINT.pack_into(raw, FIXED_HEADER.size + i * FIXED_POINT.size,
+                              round(x * 10), round(y * 10), round(z * 10))
+    return raw
+
+
+def fixed_window(raw, epoch, duration, step):
+    magic, count, start, spacing = FIXED_HEADER.unpack_from(raw)
+    offset = epoch - start
+    if (magic != b"ORF1" or spacing != SOURCE_STEP or step <= 0 or step % spacing or
+        offset < 0 or offset % spacing or duration < 0 or duration % step or
+        offset + duration > (count - 1) * spacing or
+        len(raw) != FIXED_HEADER.size + count * FIXED_POINT.size):
+        raise ValueError("Invalid fixed orbit window")
+    rows = []
+    for t in range(0, duration + 1, step):
+        pos = FIXED_HEADER.size + (offset + t) // spacing * FIXED_POINT.size
+        x, y, z = FIXED_POINT.unpack_from(raw, pos)
+        rows.append([t, x / 10, y / 10, z / 10])
+    return rows

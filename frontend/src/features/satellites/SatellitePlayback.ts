@@ -1,6 +1,6 @@
 import {
   ArcType, Cartesian2, Cartesian3, Cartographic, ClockRange, ClockStep, Color, CustomDataSource,
-  ModelGraphics, ConstantProperty, CallbackPositionProperty, ColorGeometryInstanceAttribute, GeometryInstance, PolylineColorAppearance,
+  Model, ModelGraphics, ConstantProperty, CallbackPositionProperty, ColorGeometryInstanceAttribute, GeometryInstance, PolylineColorAppearance,
   PolylineGeometry, Primitive, HeightReference, JulianDate, LabelStyle, Math as CesiumMath, ReferenceFrame,
   TimeInterval, TimeIntervalCollection, TrackingReferenceFrame, VelocityOrientationProperty,
 } from 'cesium';
@@ -23,6 +23,7 @@ export class SatellitePlayback {
   private lines: Primitive[] = [];
   private pendingModels = new Map<Entity, SatelliteModel>();
   private stopWaitingForLines?: () => void;
+  private fixedTracks = new Set<string>();
   private buffers = new Map<string, {xyz: Float64Array; loaded: Uint8Array}>();
   private entities: Entity[] = [];
   private orbitRadius = earthRadius;
@@ -33,6 +34,9 @@ export class SatellitePlayback {
   private preserveView = false;
   private lastUpdate = 0;
   private following: string | null = null;
+  private initializingModels = new Set<Model>();
+  private stopWatchingModelAdds: () => void;
+  private stopWatchingModelRemovals: () => void;
   private removeTick: () => void;
   private disposed = false;
 
@@ -40,6 +44,17 @@ export class SatellitePlayback {
     void viewer.dataSources.add(this.source).then(source => {
       if (this.disposed && !viewer.isDestroyed()) viewer.dataSources.remove(source, true);
     });
+    // Paused clocks still need frames while a newly attached glTF uploads its textures.
+    const scene = viewer.scene;
+    this.stopWatchingModelAdds = scene.primitives.primitiveAdded.addEventListener(primitive => {
+      if (!(primitive instanceof Model) || !this.entities.includes(primitive.id)) return;
+      this.initializingModels.add(primitive);
+      const complete = () => { this.initializingModels.delete(primitive); scene.requestRender(); };
+      primitive.texturesReadyEvent.addEventListener(complete);
+      primitive.errorEvent.addEventListener(complete);
+      scene.requestRender();
+    });
+    this.stopWatchingModelRemovals = scene.primitives.primitiveRemoved.addEventListener(p => this.initializingModels.delete(p));
     this.removeTick = viewer.clock.onTick.addEventListener(() => this.tick());
   }
 
@@ -47,11 +62,12 @@ export class SatellitePlayback {
     if (this.disposed) return;
     const newReplay = manifest !== this.manifest;
     const previous = this.manifest;
-    const extending = newReplay && previous && previous.satellites.length < manifest.satellites.length &&
-      previous.epoch_utc === manifest.epoch_utc && previous.satellites.every(old =>
-        manifest.satellites.some(s => s.satellite_id === old.satellite_id) &&
-        models.find(m => m.norad_id === old.norad_id)?.version_id ===
-          this.models.find(m => m.norad_id === old.norad_id)?.version_id);
+    const overlap = previous?.satellites.filter(old => manifest.satellites.some(s => s.satellite_id === old.satellite_id));
+    const extending = newReplay && previous && overlap?.length && previous.epoch_utc === manifest.epoch_utc &&
+      (overlap.length === previous.satellites.length || (previous.duration_s === manifest.duration_s &&
+        previous.satellites.every(s => s.format === 'ORF1') && manifest.satellites.every(s => s.format === 'ORF1'))) &&
+      overlap.every(old => models.find(m => m.norad_id === old.norad_id)?.version_id ===
+        this.models.find(m => m.norad_id === old.norad_id)?.version_id);
     if (newReplay) {
       if (!extending) this.clear(false);
       else {
@@ -59,11 +75,24 @@ export class SatellitePlayback {
         this.windowController.abort();
         this.windowController = new AbortController();
         for (const old of previous.satellites) {
-          const next = manifest.satellites.find(s => s.satellite_id === old.satellite_id)!;
-          const sameSamples = previous.output_step_s === manifest.output_step_s &&
+          const next = manifest.satellites.find(s => s.satellite_id === old.satellite_id);
+          const sameFixed = next && old.format === 'ORF1' && old.pack_key === next.pack_key &&
+            previous.duration_s === manifest.duration_s && old.display_step_s === next.display_step_s;
+          const sameSamples = next && previous.output_step_s === manifest.output_step_s &&
             old.pack_key === next.pack_key && old.blocks && next.blocks && old.blocks.length === next.blocks.length &&
             old.blocks.every((b,i) => b.key === next.blocks![i].key && b.start === next.blocks![i].start);
-          if (sameSamples) continue;
+          if (sameFixed || sameSamples) continue;
+          if (!next) {
+            const entity = this.source.entities.getById(old.satellite_id);
+            if (entity) {
+              if (this.viewer.trackedEntity === entity) this.follow(null);
+              this.pendingModels.delete(entity);
+              this.entities = this.entities.filter(e => e !== entity);
+              this.source.entities.remove(entity);
+            }
+            this.source.entities.removeById(old.satellite_id + '-subpoint');
+          }
+          this.fixedTracks.delete(old.satellite_id);
           this.buffers.delete(old.satellite_id);
           this.readers.delete(old.satellite_id);
           this.orbitBounds.delete(old.satellite_id);
@@ -81,32 +110,35 @@ export class SatellitePlayback {
       this.manifest = manifest;
       this.models = models;
       this.epoch = JulianDate.fromIso8601(manifest.epoch_utc);
-      for (const satellite of manifest.satellites) {
-        if (satellite.overview && !this.trackLines.has(satellite.satellite_id)) {
-          const color = Color.fromCssColorString(colors[satellite.norad_id % colors.length]);
-          this.addLine(satellite.satellite_id, Cartesian3.unpackArray(satellite.overview), color);
-        }
-      }
     }
     const spec = chunk.satellite;
     const id = spec.satellite_id;
     const color = Color.fromCssColorString(colors[spec.norad_id % colors.length]);
     let buffer = this.buffers.get(id);
+    const fixed = chunk.fixed;
+    if (fixed && this.fixedTracks.has(id)) {
+      if (newReplay) this.tick(true);
+      return;
+    }
     const firstChunk = !buffer;
     if (chunk.nextWindow && (!buffer || !this.readers.has(id))) this.readers.set(id, chunk.nextWindow);
     if (buffer && buffer.loaded[chunk.first]) {
       this.tick(true);
       return JulianDate.secondsDifference(this.viewer.clock.currentTime, this.epoch);
     }
-    if (!buffer) {
+    if (!fixed && !buffer) {
       buffer = {xyz: new Float64Array(spec.sample_count * 3), loaded: new Uint8Array(spec.sample_count)};
       this.buffers.set(id, buffer);
     }
-    const {xyz, loaded} = buffer;
+    const xyz = buffer?.xyz ?? chunk.xyz;
+    const loaded = buffer?.loaded;
     const end = chunk.first + chunk.xyz.length / 3;
-    xyz.set(chunk.xyz, chunk.first * 3);
-    loaded.fill(1, chunk.first, end);
-    const overview = spec.overview;
+    if (fixed) this.fixedTracks.add(id);
+    else {
+      xyz.set(chunk.xyz, chunk.first * 3);
+      loaded!.fill(1, chunk.first, end);
+    }
+    const overview = fixed?.overview() ?? spec.overview;
     const bounds = this.orbitBounds.get(id) ?? {min: Infinity, max: 0};
     const coordinates = firstChunk && overview ? overview : chunk.xyz;
     for (let i = 0; i < coordinates.length; i += 3) {
@@ -117,10 +149,12 @@ export class SatellitePlayback {
     this.orbitBounds.set(id, bounds);
     const expandView = firstChunk && this.orbitRadius * 1.1 < bounds.max;
     this.orbitRadius = Math.max(this.orbitRadius, bounds.max);
-    if (!overview) {
+    if (firstChunk && overview) {
+      this.addLine(id, Cartesian3.unpackArray(overview), color);
+    } else if (!overview) {
       // Older manifests have no overview. Join already loaded neighbours at hour boundaries.
-      const first = Math.max(0, chunk.first - (loaded[chunk.first-1] ? 1 : 0));
-      const last = end - 1 + (loaded[end] ? 1 : 0);
+      const first = Math.max(0, chunk.first - (loaded?.[chunk.first-1] ? 1 : 0));
+      const last = end - 1 + (loaded?.[end] ? 1 : 0);
       const stride = Math.max(1, Math.ceil(spec.sample_count / 720));
       const point = (i: number) => new Cartesian3(xyz[3*i], xyz[3*i+1], xyz[3*i+2]);
       const positions = [];
@@ -130,14 +164,17 @@ export class SatellitePlayback {
     }
     if (firstChunk) {
       const model = models.find(m => m.norad_id === spec.norad_id)!;
+      const step = fixed?.step ?? manifest.output_step_s;
+      const count = fixed?.count ?? spec.sample_count;
+      const coordinate = (i: number, axis: number) => fixed ? fixed.coordinate(i, axis) : xyz[3*i+axis];
       const position = new CallbackPositionProperty((time, result) => {
-        const t = JulianDate.secondsDifference(time!, this.epoch) / manifest.output_step_s;
-        if (t < 0 || t > spec.sample_count - 1) return undefined;
+        const t = JulianDate.secondsDifference(time!, this.epoch) / step;
+        if (t < 0 || t > count - 1) return undefined;
         const i = Math.floor(t), j = Math.ceil(t);
-        if (!loaded[i] || !loaded[j]) return undefined;
-        const f = t-i, a = 3*i, b = 3*j;
-        return Cartesian3.fromElements(xyz[a]+f*(xyz[b]-xyz[a]), xyz[a+1]+f*(xyz[b+1]-xyz[a+1]),
-          xyz[a+2]+f*(xyz[b+2]-xyz[a+2]), result);
+        if (loaded && (!loaded[i] || !loaded[j])) return undefined;
+        const f = t - i;
+        const interpolate = (axis: number) => coordinate(i, axis) * (1-f) + coordinate(j, axis) * f;
+        return Cartesian3.fromElements(interpolate(0), interpolate(1), interpolate(2), result);
       }, false, ReferenceFrame.FIXED);
       const availability = new TimeIntervalCollection([new TimeInterval({
         start: this.epoch, stop: JulianDate.fromIso8601(manifest.stop_utc),
@@ -147,7 +184,7 @@ export class SatellitePlayback {
         existing.position = position;
         existing.orientation = new VelocityOrientationProperty(position);
         existing.availability = availability;
-        existing.path!.resolution = new ConstantProperty(manifest.output_step_s);
+        existing.path!.resolution = new ConstantProperty(step);
         const subpoint = this.source.entities.getById(id + '-subpoint')!;
         subpoint.position = subsatellitePosition(position);
         subpoint.availability = availability;
@@ -162,7 +199,7 @@ export class SatellitePlayback {
           label: { text: spec.object_name, font: '13px sans-serif', fillColor: color,
             outlineColor: Color.fromCssColorString('#06162e'), outlineWidth: 3,
             style: LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cartesian2(0, -26) },
-          path: { leadTime: 0, trailTime: 900, resolution: manifest.output_step_s, width: 2.5, material: color },
+          path: { leadTime: 0, trailTime: 900, resolution: step, width: 2.5, material: color },
         });
         this.entities.push(entity);
         this.queueModel(entity, model);
@@ -235,6 +272,7 @@ export class SatellitePlayback {
   }
 
   private tick(force = false) {
+    if (this.initializingModels.size) this.viewer.scene.requestRender();
     if (!this.manifest || this.disposed || (!force && performance.now() - this.lastUpdate < 150)) return;
     this.lastUpdate = performance.now();
     const clock = this.viewer.clock;
@@ -282,8 +320,14 @@ export class SatellitePlayback {
   }
   seek(seconds: number) {
     if (!this.manifest) return;
+    if (this.loading.size) {
+      this.windowController.abort();
+      this.windowController = new AbortController();
+      this.loading.clear();
+    }
     this.errors.clear();
-    this.play(false);
+    this.viewer.clock.shouldAnimate = false;
+    this.viewer.scene.maximumRenderTimeChange = Infinity;
     this.viewer.clock.currentTime = JulianDate.addSeconds(this.epoch,
       Math.max(0, Math.min(seconds, this.manifest.duration_s)), new JulianDate());
     this.viewer.scene.requestRender();
@@ -347,6 +391,8 @@ export class SatellitePlayback {
     for (const line of this.lines) this.viewer.scene.primitives.remove(line);
     this.lines = [];
     this.trackLines.clear();
+    this.initializingModels.clear();
+    this.fixedTracks.clear();
     this.buffers.clear();
     this.windowController.abort();
     this.windowController = new AbortController();
@@ -363,6 +409,8 @@ export class SatellitePlayback {
   }
   destroy() {
     this.disposed = true;
+    this.stopWatchingModelAdds();
+    this.stopWatchingModelRemovals();
     this.removeTick();
     this.clear(false);
     this.viewer.dataSources.remove(this.source, true);
