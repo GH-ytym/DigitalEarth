@@ -3,9 +3,9 @@ from datetime import datetime, timezone, timedelta
 from hashlib import sha256
 import json
 import logging
-from threading import Lock
+from threading import Condition, Lock
 
-from orbit_codec import SOURCE_DURATION, SOURCE_STEP
+from orbit_codec import SOURCE_DURATION, SOURCE_STEP, encode_fixed
 from catalog import SATELLITES, SPECIFICATIONS
 from dll_adapter import ENGINE_VERSION, FRAME_VERSION, utc
 
@@ -19,6 +19,8 @@ class SatelliteService:
         self.store, self.catalog, self.native = store, catalog, native
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sgp4-dll")
         self.lock = Lock()
+        self.preview_changed = Condition()
+        self.previews = {}
         self.active, self.native_calls = 0, 0
 
     def prepare(self, ids):
@@ -70,6 +72,8 @@ class SatelliteService:
                 return row, False
             if not complete:
                 self.active += 1
+                with self.preview_changed:
+                    self.previews[str(row["job_id"])] = []
                 self.executor.submit(self.compute, row, prepared)
                 return row, True
         # Publish a fully cached selection inline so the client can skip job polling.
@@ -83,8 +87,18 @@ class SatelliteService:
             logger.exception("Failed to resolve single-satellite sources")
             self.store.fail(row["result_id"], "读取卫星轨迹索引失败。")
         finally:
+            with self.preview_changed:
+                self.previews.pop(str(row["job_id"]), None)
+                self.preview_changed.notify_all()
             with self.lock:
                 self.active -= 1
+
+    def preview_batch(self, job_id, cursor):
+        with self.preview_changed:
+            self.preview_changed.wait_for(lambda: job_id not in self.previews or
+                len(self.previews[job_id]) > cursor, timeout=2)
+            rows = self.previews.get(job_id)
+            return rows is None, rows[cursor] if rows and cursor < len(rows) else None
 
     def build_result(self, row, request, sources):
         try:
@@ -103,7 +117,12 @@ class SatelliteService:
                     with self.lock:
                         self.native_calls += 1
                     points = self.native.propagate(record, utc(request["epoch_utc"]), duration=SOURCE_DURATION, step=SOURCE_STEP)
-                    samples.append(dict(satellite_id=satellite_id, samples=points))
+                    raw = bytes(encode_fixed(points, source_epoch))
+                    digest = sha256(raw).hexdigest()
+                    with self.preview_changed:
+                        self.previews[str(row["job_id"])].append((norad, source_epoch, request["duration_s"], digest, raw))
+                        self.preview_changed.notify_all()
+                    samples.append(dict(satellite_id=satellite_id, raw=raw, digest=digest))
                 satellites.append(dict(satellite_id=satellite_id, norad_id=norad,
                     display_name=SATELLITES[norad], object_name=record["OBJECT_NAME"],
                     sample_key=key, format="ORF1", source_epoch=source_epoch,

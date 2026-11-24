@@ -122,8 +122,18 @@ def submit(body: TrackRequest, request: Request):
     except (ValueError, BusyError) as exc:
         raise HTTPException(503, str(exc)) from exc
     result = job_description(row)
-    result.update(cache_hit=not created and row["status"] == "succeeded")
+    result.update(preview_supported=True, cache_hit=not created and row["status"] == "succeeded")
     return JSONResponse(result, status_code=200 if row["status"] == "succeeded" else 202)
+
+@app.get(PREFIX + "/jobs/{job_id}/preview")
+def preview(job_id: UUID, request: Request, cursor: int = Query(0, ge=0)):
+    done, item = request.app.state.service.preview_batch(str(job_id), cursor)
+    headers = {"Cache-Control": "no-store"}
+    if item is None:
+        return Response(status_code=204 if done else 202, headers=headers)
+    norad, epoch, duration, digest, raw = item
+    headers.update({"X-Norad": str(norad), "X-Epoch": str(epoch), "X-Duration": str(duration), "X-Digest": digest})
+    return Response(content=raw, media_type="application/octet-stream", headers=headers)
 
 @app.get(PREFIX + "/jobs/{job_id}")
 def job(job_id: UUID, request: Request):

@@ -150,7 +150,12 @@ export class SatellitePlayback {
     const expandView = firstChunk && this.orbitRadius * 1.1 < bounds.max;
     this.orbitRadius = Math.max(this.orbitRadius, bounds.max);
     if (firstChunk && overview) {
-      this.addLine(id, Cartesian3.unpackArray(overview), color);
+      const line = this.previewLines.get(spec.norad_id);
+      if (line) {
+        this.previewLines.delete(spec.norad_id);
+        this.lines.push(line);
+        this.trackLines.set(id, [line]);
+      } else this.addLine(id, Cartesian3.unpackArray(overview), color);
     } else if (!overview) {
       // Older manifests have no overview. Join already loaded neighbours at hour boundaries.
       const first = Math.max(0, chunk.first - (loaded?.[chunk.first-1] ? 1 : 0));
@@ -257,14 +262,33 @@ export class SatellitePlayback {
     });
   }
 
-  private addLine(id: string, positions: Cartesian3[], color: Color) {
-    if (positions.length < 2) return;
-    const line = new Primitive({
+  private previewLines = new Map<number, Primitive>();
+
+  preview(norad: number, xyz: number[]) {
+    const color = Color.fromCssColorString(colors[norad % colors.length]);
+    const scene = this.viewer.scene;
+    const line = scene.primitives.add(this.makeLine(`norad-${norad}`, Cartesian3.unpackArray(xyz), color));
+    this.previewLines.set(norad, line);
+    scene.requestRender();
+    return () => {
+      if (this.previewLines.get(norad) !== line) return;
+      this.previewLines.delete(norad);
+      if (!scene.isDestroyed()) { scene.primitives.remove(line); scene.requestRender(); }
+    };
+  }
+
+  private makeLine(id: string, positions: Cartesian3[], color: Color) {
+    return new Primitive({
       geometryInstances: new GeometryInstance({ id, geometry: new PolylineGeometry({
         positions, width: 1.3, arcType: ArcType.NONE, vertexFormat: PolylineColorAppearance.VERTEX_FORMAT,
       }), attributes: {color: ColorGeometryInstanceAttribute.fromColor(color.withAlpha(0.5))} }),
       appearance: new PolylineColorAppearance({translucent: true}), asynchronous: true,
     });
+  }
+
+  private addLine(id: string, positions: Cartesian3[], color: Color) {
+    if (positions.length < 2) return;
+    const line = this.makeLine(id, positions, color);
     this.lines.push(this.viewer.scene.primitives.add(line));
     const track = this.trackLines.get(id) ?? [];
     track.push(line);

@@ -576,6 +576,7 @@ export class SceneController {
     this.viewer.scene.requestRender();
   }
 
+  previewSatellite(norad: number, xyz: number[]) { return this.satellitePlayback.preview(norad, xyz); }
   loadSatellites(manifest: SatelliteManifest, samples: OrbitChunk, models: SatelliteModel[]) { return this.satellitePlayback.load(manifest, samples, models); }
   playSatellites(enabled: boolean) { this.satellitePlayback.play(enabled); }
   seekSatellites(seconds: number) { this.satellitePlayback.seek(seconds); }

@@ -17,12 +17,13 @@ interface Props {
   active: boolean;
   playback: SatellitePlaybackState | null;
   ready: boolean;
+  onPreview: (norad: number, xyz: number[]) => () => void;
   onLoad: ReceiveChunk;
   onFocus: () => void;
   onClear: () => void;
 }
 
-export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onClear }: Props) {
+export function SatellitePanel({ active, playback, ready, onPreview, onLoad, onFocus, onClear }: Props) {
   const [catalog, setCatalog] = useState<SatelliteCatalog | null>(null);
   const [selected, setSelected] = useState<number[]>([25544, 48274, 20580]);
   const [search, setSearch] = useState('');
@@ -65,6 +66,9 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
     operation.current = controller;
     setBusy(true);
     setError(null);
+    const previews = new Map<number, () => void>();
+    const clearPreviews = () => { for (const remove of previews.values()) remove(); previews.clear(); };
+    controller.signal.addEventListener('abort', clearPreviews, {once: true});
     try {
       if (action === 'refresh') {
         const value = await readCatalog(controller.signal, true);
@@ -72,7 +76,9 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
         setMessage('卫星数据已读取。');
       } else {
         setMessage('正在加载轨迹…');
-        const data = await loadSelectedTrack(selected, controller.signal, onLoad);
+        const data = await loadSelectedTrack(selected, controller.signal, onLoad, (norad, xyz) => {
+          if (!controller.signal.aborted && !previews.has(norad)) previews.set(norad, onPreview(norad, xyz));
+        });
         if (controller.signal.aborted) return;
         setSelected(data.manifest.satellites.map(sat => sat.norad_id)
           .filter(id => catalog?.satellites.some(sat => sat.norad_id === id)).slice(0, limit));
@@ -84,6 +90,8 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
         setError(err instanceof Error ? err.message : '卫星数据加载失败。');
       }
     } finally {
+      clearPreviews();
+      controller.signal.removeEventListener('abort', clearPreviews);
       if (!controller.signal.aborted) setBusy(false);
     }
   }

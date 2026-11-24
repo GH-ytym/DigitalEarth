@@ -151,10 +151,9 @@ class Store:
             for spec, track in zip(manifest["satellites"], samples["satellites"], strict=True):
                 if track is None:  # Already published immutable blocks shared by another result.
                     continue
-                rows = track["samples"]
                 if spec.get("format") == "ORF1":
-                    raw = encode_fixed(rows, spec["source_epoch"])
-                    digest = sha256(raw).hexdigest()
+                    raw = track.get("raw") or encode_fixed(track["samples"], spec["source_epoch"])
+                    digest = track.get("digest") or sha256(raw).hexdigest()
                     key = f"orbit-packs/{spec['norad_id']}/{digest}.orb"
                     spec["pack_key"] = key
                     uploads.append(pool.submit(self.objects.put_object, self.settings.bucket, key,
@@ -163,6 +162,7 @@ class Store:
                         ON CONFLICT(identity,epoch) DO UPDATE SET pack_key=EXCLUDED.pack_key""",
                         (spec["sample_key"], spec["source_epoch"], key))
                     continue
+                rows = track["samples"]
                 # Overview only; playback still uses every original sample in the hour blocks.
                 stride = max(1, (len(rows) - 1 + 719) // 720)
                 overview = rows[:-1:stride] + [rows[-1]]

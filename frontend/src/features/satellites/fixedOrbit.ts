@@ -78,10 +78,14 @@ export async function loadFixedOrbit(url: string, digest: string, sourceEpoch: n
   const response = await fetch(url, {signal});
   if (!response.ok) throw new Error('单星轨迹下载失败');
   const bytes = await response.arrayBuffer();
+  return acceptFixedOrbit(bytes, url, digest, sourceEpoch, epoch, duration, step);
+}
+
+export async function acceptFixedOrbit(bytes: ArrayBuffer, url: string, digest: string, sourceEpoch: number, epoch: number, duration: number, step: number) {
   const hash = await crypto.subtle.digest('SHA-256', bytes);
   if (Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('') !== digest)
     throw new Error('单星轨迹校验失败');
-  const orbit = open(bytes);
+  const orbit = new FixedOrbit(bytes, sourceEpoch, epoch, duration, step);
   await write(url, bytes).catch(() => undefined); // Storage quota and private browsing can disable persistence.
   return orbit;
 }

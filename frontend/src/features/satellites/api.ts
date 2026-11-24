@@ -1,4 +1,4 @@
-import { loadFixedOrbit } from './fixedOrbit.ts';
+import { FixedOrbit, acceptFixedOrbit, loadFixedOrbit } from './fixedOrbit.ts';
 import { decodePackedOrbit } from './orbitCodec.ts';
 import type { OrbitChunk, ReceiveChunk, SatelliteModel, SatelliteCatalog, SatelliteJob, SatelliteManifest, SatelliteModelResolution, SatelliteSamples } from './types';
 
@@ -103,7 +103,7 @@ export async function satelliteJSON<T>(path: string, signal: AbortSignal, body?:
   }
 }
 
-export async function loadSavedTrack(id: string, signal: AbortSignal, receive: ReceiveChunk) {
+export async function loadSavedTrack(id: string, signal: AbortSignal, receive: ReceiveChunk, early = new Map<string, FixedOrbit>()) {
   const manifest = await satelliteJSON<unknown>(`${satelliteApi}/tracks/${id}`, signal);
   if (!isManifest(manifest)) throw new Error('卫星成果说明格式异常。');
   const models = (async () => {
@@ -120,13 +120,36 @@ export async function loadSavedTrack(id: string, signal: AbortSignal, receive: R
     }
     return response.models;
   })();
-  await streamTracks(manifest, signal, models, receive);
+  await streamTracks(manifest, signal, models, receive, early);
   return { manifest, models: await models };
 }
-export async function loadSelectedTrack(ids: number[], signal: AbortSignal, receive: ReceiveChunk) {
+export async function loadSelectedTrack(ids: number[], signal: AbortSignal, receive: ReceiveChunk,
+  preview?: (norad: number, xyz: number[]) => void) {
   const submitted = await satelliteJSON<SatelliteJob>(`${satelliteApi}/tracks`, signal, { norad_ids: ids });
+  const early = new Map<string, FixedOrbit>();
   let job = submitted;
   const deadline = performance.now() + 120000;
+  if (preview && submitted.preview_supported && (job.status === 'queued' || job.status === 'running')) {
+    let cursor = 0;
+    while (performance.now() < deadline) {
+      const response = await fetch(`${satelliteApi}/jobs/${job.job_id}/preview?cursor=${cursor}`, {signal});
+      if (response.status === 204) break;
+      if (response.status === 202) continue;
+      if (!response.ok) break;
+      const norad = Number(response.headers.get('X-Norad'));
+      const epoch = Number(response.headers.get('X-Epoch'));
+      const duration = Number(response.headers.get('X-Duration'));
+      const digest = response.headers.get('X-Digest') ?? '';
+      if (!ids.includes(norad) || !/^[0-9a-f]{64}$/.test(digest)) throw new Error('单星轨迹标识无效');
+      const fixed = await acceptFixedOrbit(await response.arrayBuffer(), `${satelliteApi}/packs/${norad}/${digest}`,
+        digest, epoch, epoch, duration, 10);
+      signal.throwIfAborted();
+      early.set(digest, fixed);
+      preview(norad, fixed.overview());
+      cursor++;
+    }
+    job = await satelliteJSON<SatelliteJob>(`${satelliteApi}/jobs/${job.job_id}`, signal);
+  }
   while (job.status === 'queued' || job.status === 'running') {
     if (performance.now() > deadline) throw new Error('轨迹尚未完成，可稍后从已保存结果重新加载。');
     await new Promise<void>((resolve, reject) => {
@@ -138,7 +161,7 @@ export async function loadSelectedTrack(ids: number[], signal: AbortSignal, rece
     job = await satelliteJSON<SatelliteJob>(`${satelliteApi}/jobs/${job.job_id}`, signal);
   }
   if (job.status !== 'succeeded') throw new Error(job.error || '卫星轨迹生成失败。');
-  return { ...await loadSavedTrack(job.result_id, signal, receive), reused: !!submitted.cache_hit };
+  return { ...await loadSavedTrack(job.result_id, signal, receive, early), reused: !!submitted.cache_hit };
 }
 export async function readCatalog(signal: AbortSignal, refresh = false): Promise<SatelliteCatalog> {
   const catalog = await satelliteJSON<SatelliteCatalog>(`${satelliteApi}/${refresh ? 'refresh' : 'catalog'}`, signal, refresh ? {} : undefined);
@@ -151,7 +174,7 @@ export async function readCatalog(signal: AbortSignal, refresh = false): Promise
   return catalog;
 }
 async function streamTracks(manifest: SatelliteManifest, signal: AbortSignal,
-  models: Promise<SatelliteModel[]>, receive: ReceiveChunk) {
+  models: Promise<SatelliteModel[]>, receive: ReceiveChunk, early: Map<string, FixedOrbit>) {
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal.addEventListener('abort', abort, { once: true });
@@ -165,7 +188,7 @@ async function streamTracks(manifest: SatelliteManifest, signal: AbortSignal,
         throw new Error('轨迹对象索引无效');
       if (satellite.format === 'ORF1') {
         if (!pack || !Number.isSafeInteger(satellite.source_epoch)) throw new Error('单星轨迹索引无效');
-        const fixed = await loadFixedOrbit(`${satelliteApi}/packs/${pack[1]}/${pack[2]}`, pack[2],
+        const fixed = early.get(pack[2]) ?? await loadFixedOrbit(`${satelliteApi}/packs/${pack[1]}/${pack[2]}`, pack[2],
           satellite.source_epoch!, Date.parse(manifest.epoch_utc) / 1000, manifest.duration_s,
           satellite.display_step_s!, controller.signal);
         const resolved = await models;

@@ -76,6 +76,7 @@ export interface SatelliteModelResolution {
   models: SatelliteModel[];
 }
 export interface SatelliteJob {
+  preview_supported?: boolean;
   job_id: string;
   result_id: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed';
