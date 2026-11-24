@@ -16,7 +16,7 @@ function sourceURL(value: unknown): value is string {
 
 export function isModelResolution(value: unknown, noradIds: readonly number[]): value is SatelliteModelResolution {
   const required = new Set(noradIds);
-  if (!noradIds.length || noradIds.length > 3 || required.size !== noradIds.length ||
+  if (!noradIds.length || required.size !== noradIds.length ||
       !noradIds.every(id => Number.isSafeInteger(id) && id > 0) || !object(value) ||
       !Array.isArray(value.models) || value.models.length !== required.size) return false;
   const seen = new Set<number>();
@@ -46,7 +46,7 @@ export function isManifest(value: unknown): value is SatelliteManifest {
       typeof value.output_step_s !== 'number' || !Number.isFinite(value.output_step_s) || value.output_step_s < 1 ||
       !['current-window', 'historical'].includes(value.window_kind as string) ||
       value.samples_url !== `${satelliteApi}/tracks/${value.result_id}/samples`) return false;
-  if (!Array.isArray(value.satellites) || value.satellites.length < 1 || value.satellites.length > 3) return false;
+  if (!Array.isArray(value.satellites) || value.satellites.length < 1) return false;
   const satellites = value.satellites;
   return satellites.every(sat => object(sat) &&
     (sat.overview === undefined || (Array.isArray(sat.overview) && sat.overview.length >= 6 &&
@@ -141,7 +141,7 @@ export async function loadSelectedTrack(ids: number[], signal: AbortSignal, rece
 }
 export async function readCatalog(signal: AbortSignal, refresh = false): Promise<SatelliteCatalog> {
   const catalog = await satelliteJSON<SatelliteCatalog>(`${satelliteApi}/${refresh ? 'refresh' : 'catalog'}`, signal, refresh ? {} : undefined);
-  if (!Number.isSafeInteger(catalog.max_selected) || catalog.max_selected < 1 || catalog.max_selected > 3 ||
+  if (!Number.isSafeInteger(catalog.max_selected) || catalog.max_selected < 1 ||
     !Array.isArray(catalog.satellites) || !catalog.satellites.length || !catalog.satellites.every(sat =>
     Number.isSafeInteger(sat.norad_id) && typeof sat.display_name === 'string' && validDate(sat.epoch_utc) &&
     typeof sat.category === 'string' && typeof sat.category_name === 'string' && ['LEO', 'MEO', 'GEO'].includes(sat.orbit_type))) {
@@ -163,8 +163,7 @@ async function streamTracks(manifest: SatelliteManifest, signal: AbortSignal,
   if (signal.aborted) abort();
   const step = manifest.output_step_s;
   try {
-    // One worker per selected satellite (the manifest permits at most three).
-    await Promise.all([models, ...manifest.satellites.map(async satellite => {
+    async function loadSatellite(satellite: SatelliteManifest["satellites"][number]) {
       let count = 0;
       const parts = satellite.blocks?.map(block => {
         const match = /^orbit-blocks\/(\d+)\/([0-9a-f]{64})\.orb$/.exec(block.key);
@@ -209,7 +208,12 @@ async function streamTracks(manifest: SatelliteManifest, signal: AbortSignal,
         controller.signal.throwIfAborted();
         elapsed = receive(manifest, chunk, resolved) ?? 0;
       }
-    })]);
+    }
+    let next = 0;
+    async function worker() {
+      while (next < manifest.satellites.length) await loadSatellite(manifest.satellites[next++]);
+    }
+    await Promise.all([models, ...Array.from({length: Math.min(3, manifest.satellites.length)}, worker)]);
   } finally {
     abort();
     signal.removeEventListener('abort', abort);

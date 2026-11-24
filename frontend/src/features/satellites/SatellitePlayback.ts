@@ -1,6 +1,6 @@
 import {
   ArcType, Cartesian2, Cartesian3, Cartographic, ClockRange, ClockStep, Color, CustomDataSource,
-  CallbackPositionProperty, ColorGeometryInstanceAttribute, GeometryInstance, PolylineColorAppearance,
+  ConstantProperty, CallbackPositionProperty, ColorGeometryInstanceAttribute, GeometryInstance, PolylineColorAppearance,
   PolylineGeometry, Primitive, HeightReference, JulianDate, LabelStyle, Math as CesiumMath, ReferenceFrame,
   TimeInterval, TimeIntervalCollection, TrackingReferenceFrame, VelocityOrientationProperty,
 } from 'cesium';
@@ -19,6 +19,7 @@ export class SatellitePlayback {
   private readers = new Map<string, NonNullable<OrbitChunk['nextWindow']>>();
   private loading = new Set<string>();
   private errors = new Map<string, string>();
+  private trackLines = new Map<string, Primitive[]>();
   private lines: Primitive[] = [];
   private buffers = new Map<string, {xyz: Float64Array; loaded: Uint8Array}>();
   private entities: Entity[] = [];
@@ -27,6 +28,7 @@ export class SatellitePlayback {
   private manifest: SatelliteManifest | null = null;
   private models: SatelliteModel[] = [];
   private epoch = new JulianDate();
+  private preserveView = false;
   private lastUpdate = 0;
   private following: string | null = null;
   private removeTick: () => void;
@@ -42,18 +44,52 @@ export class SatellitePlayback {
   load(manifest: SatelliteManifest, chunk: OrbitChunk, models: SatelliteModel[]) {
     if (this.disposed) return;
     const newReplay = manifest !== this.manifest;
+    const previous = this.manifest;
+    const extending = newReplay && previous && previous.satellites.length < manifest.satellites.length &&
+      previous.epoch_utc === manifest.epoch_utc && previous.satellites.every(old =>
+        manifest.satellites.some(s => s.satellite_id === old.satellite_id) &&
+        models.find(m => m.norad_id === old.norad_id)?.version_id ===
+          this.models.find(m => m.norad_id === old.norad_id)?.version_id);
     if (newReplay) {
-      this.clear(false);
+      if (!extending) this.clear(false);
+      else {
+        // Old window callbacks capture the previous manifest; retire them before switching.
+        this.windowController.abort();
+        this.windowController = new AbortController();
+        for (const old of previous.satellites) {
+          const next = manifest.satellites.find(s => s.satellite_id === old.satellite_id)!;
+          const sameSamples = previous.output_step_s === manifest.output_step_s &&
+            old.blocks && next.blocks && old.blocks.length === next.blocks.length &&
+            old.blocks.every((b,i) => b.key === next.blocks![i].key && b.start === next.blocks![i].start);
+          if (sameSamples) continue;
+          this.buffers.delete(old.satellite_id);
+          this.readers.delete(old.satellite_id);
+          this.orbitBounds.delete(old.satellite_id);
+          for (const line of this.trackLines.get(old.satellite_id) ?? []) {
+            this.viewer.scene.primitives.remove(line);
+            this.lines.splice(this.lines.indexOf(line), 1);
+          }
+          this.trackLines.delete(old.satellite_id);
+        }
+        this.viewer.clock.stopTime = JulianDate.fromIso8601(manifest.stop_utc);
+        this.loading.clear();
+        this.errors.clear();
+      }
+      this.preserveView = !!extending;
       this.manifest = manifest;
       this.models = models;
       this.epoch = JulianDate.fromIso8601(manifest.epoch_utc);
     }
     const spec = chunk.satellite;
     const id = spec.satellite_id;
-    const color = Color.fromCssColorString(colors[manifest.satellites.indexOf(spec)]);
+    const color = Color.fromCssColorString(colors[spec.norad_id % colors.length]);
     let buffer = this.buffers.get(id);
     const firstChunk = !buffer;
-    if (chunk.nextWindow) this.readers.set(id, chunk.nextWindow);
+    if (chunk.nextWindow && (!buffer || !this.readers.has(id))) this.readers.set(id, chunk.nextWindow);
+    if (buffer && buffer.loaded[chunk.first]) {
+      this.tick(true);
+      return JulianDate.secondsDifference(this.viewer.clock.currentTime, this.epoch);
+    }
     if (!buffer) {
       buffer = {xyz: new Float64Array(spec.sample_count * 3), loaded: new Uint8Array(spec.sample_count)};
       this.buffers.set(id, buffer);
@@ -100,31 +136,42 @@ export class SatellitePlayback {
       const availability = new TimeIntervalCollection([new TimeInterval({
         start: this.epoch, stop: JulianDate.fromIso8601(manifest.stop_utc),
       })]);
-      this.entities.push(this.source.entities.add({ id: spec.satellite_id, position,
-        availability,
-        // Keep a north-up Earth overview; only the view centre follows the satellite.
-        trackingReferenceFrame: TrackingReferenceFrame.ENU,
-        viewFrom: this.followOffset(bounds),
-        orientation: new VelocityOrientationProperty(position),
-        model: { uri: model.model_url, scale: model.render_options.scale,
-          minimumPixelSize: model.render_options.minimum_pixel_size, maximumScale: model.render_options.maximum_scale },
-        point: { pixelSize: 6, color },
-        label: { text: spec.object_name, font: '13px sans-serif', fillColor: color,
-          outlineColor: Color.fromCssColorString('#06162e'), outlineWidth: 3,
-          style: LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cartesian2(0, -26) },
-        path: { leadTime: 0, trailTime: 900, resolution: manifest.output_step_s, width: 2.5, material: color },
-      }));
-      this.source.entities.add({ id: `${spec.satellite_id}-subpoint`, availability,
-        position: subsatellitePosition(position),
-        point: { pixelSize: 10, color, outlineColor: Color.fromCssColorString('#06162e'),
-          outlineWidth: 2, heightReference: HeightReference.CLAMP_TO_GROUND },
-        label: { text: `${spec.object_name} 星下点`, font: '12px sans-serif', fillColor: color,
-          outlineColor: Color.fromCssColorString('#06162e'), outlineWidth: 3,
-          style: LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cartesian2(0, 18),
-          heightReference: HeightReference.CLAMP_TO_GROUND },
-      });
+      const existing = this.source.entities.getById(id);
+      if (existing) {
+        existing.position = position;
+        existing.orientation = new VelocityOrientationProperty(position);
+        existing.availability = availability;
+        existing.path!.resolution = new ConstantProperty(manifest.output_step_s);
+        const subpoint = this.source.entities.getById(id + '-subpoint')!;
+        subpoint.position = subsatellitePosition(position);
+        subpoint.availability = availability;
+      } else {
+        this.entities.push(this.source.entities.add({ id: spec.satellite_id, position,
+          availability,
+          // Keep a north-up Earth overview; only the view centre follows the satellite.
+          trackingReferenceFrame: TrackingReferenceFrame.ENU,
+          viewFrom: this.followOffset(bounds),
+          orientation: new VelocityOrientationProperty(position),
+          model: { uri: model.model_url, scale: model.render_options.scale,
+            minimumPixelSize: model.render_options.minimum_pixel_size, maximumScale: model.render_options.maximum_scale },
+          point: { pixelSize: 6, color },
+          label: { text: spec.object_name, font: '13px sans-serif', fillColor: color,
+            outlineColor: Color.fromCssColorString('#06162e'), outlineWidth: 3,
+            style: LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cartesian2(0, -26) },
+          path: { leadTime: 0, trailTime: 900, resolution: manifest.output_step_s, width: 2.5, material: color },
+        }));
+        this.source.entities.add({ id: `${spec.satellite_id}-subpoint`, availability,
+          position: subsatellitePosition(position),
+          point: { pixelSize: 10, color, outlineColor: Color.fromCssColorString('#06162e'),
+            outlineWidth: 2, heightReference: HeightReference.CLAMP_TO_GROUND },
+          label: { text: `${spec.object_name} 星下点`, font: '12px sans-serif', fillColor: color,
+            outlineColor: Color.fromCssColorString('#06162e'), outlineWidth: 3,
+            style: LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cartesian2(0, 18),
+            heightReference: HeightReference.CLAMP_TO_GROUND },
+        });
+      }
     }
-    if (newReplay) {
+    if (newReplay && !extending) {
       const clock = this.viewer.clock;
       clock.startTime = this.epoch.clone();
       clock.currentTime = this.epoch.clone();
@@ -135,7 +182,7 @@ export class SatellitePlayback {
       clock.canAnimate = true;
       this.focus();
       this.play(true);
-    } else if (expandView && !this.following) {
+    } else if (expandView && !this.following && !this.preserveView) {
       this.focus();
     }
     this.viewer.scene.requestRender();
@@ -152,6 +199,9 @@ export class SatellitePlayback {
       appearance: new PolylineColorAppearance({translucent: true}), asynchronous: true,
     });
     this.lines.push(this.viewer.scene.primitives.add(line));
+    const track = this.trackLines.get(id) ?? [];
+    track.push(line);
+    this.trackLines.set(id, track);
   }
 
   private tick(force = false) {
@@ -263,6 +313,7 @@ export class SatellitePlayback {
     this.source.entities.removeAll();
     for (const line of this.lines) this.viewer.scene.primitives.remove(line);
     this.lines = [];
+    this.trackLines.clear();
     this.buffers.clear();
     this.windowController.abort();
     this.windowController = new AbortController();

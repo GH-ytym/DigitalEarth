@@ -53,12 +53,12 @@ with sync_playwright() as playwright:
     def checkbox(norad):
         return page.locator(".satellite-choice").filter(has_text=f"NORAD {norad}").locator("input")
     expect(page.locator(".satellite-choice input:checked")).to_have_count(3)
-    expect(page.locator(".satellite-choice input:disabled")).to_have_count(7)
-    expect(checkbox(54234)).to_be_disabled()
+    expect(page.locator(".satellite-choice input:disabled")).to_have_count(0)
+    expect(checkbox(54234)).to_be_enabled()
     checkbox(48274).uncheck()
     expect(checkbox(54234)).to_be_enabled()
     checkbox(54234).check()
-    expect(checkbox(48274)).to_be_disabled()
+    expect(checkbox(48274)).to_be_enabled()
     search = page.get_by_role("searchbox", name="搜索卫星")
     search.fill("48808")
     expect(page.locator(".satellite-choice")).to_have_count(1)
@@ -66,13 +66,13 @@ with sync_playwright() as playwright:
     search.fill("")
     page.get_by_label("卫星分类", exact=True).select_option("navigation")
     expect(page.locator(".satellite-choice")).to_have_count(3)
-    page.get_by_role("button", name="清空卫星选择", exact=True).click()
+    page.get_by_role("button", name="清空选择和轨迹", exact=True).click()
     for norad in (36585,37846,43001):
         checkbox(norad).check()
     expect(page.locator(".satellite-choice input:checked")).to_have_count(3)
     page.get_by_label("卫星分类", exact=True).select_option("")
-    expect(page.locator(".satellite-choice input:disabled")).to_have_count(7)
-    page.get_by_role("button", name="清空卫星选择", exact=True).click()
+    expect(page.locator(".satellite-choice input:disabled")).to_have_count(0)
+    page.get_by_role("button", name="清空选择和轨迹", exact=True).click()
     for norad in (25544,20580,54234):
         checkbox(norad).check()
     catalog_list = page.get_by_role("group", name="可选卫星列表", exact=True)
@@ -269,7 +269,7 @@ with sync_playwright() as playwright:
         ("geo", [48808],7200,10,48808),
         ("mixed", [25544,36585],86400,10,36585),
     ):
-        page.get_by_role("button", name="清空卫星选择", exact=True).click()
+        page.get_by_role("button", name="清空选择和轨迹", exact=True).click()
         for norad in ids:
             checkbox(norad).check()
         load.click()
@@ -339,7 +339,7 @@ with sync_playwright() as playwright:
     expect(controls).to_have_count(0)
     expect(page.locator(".satellite-position")).to_have_count(restored_count)
     assert not errors, errors
-    page.get_by_role("button",name="卸载轨迹",exact=True).click()
+    page.get_by_role("button",name="清空选择和轨迹",exact=True).click()
     expect(page.get_by_role("region",name="卫星轨迹回放",exact=True)).to_have_count(0)
     expect(toggle).to_be_disabled()
     expect(page.locator(".cesium-widget canvas")).to_have_count(1)

@@ -1,5 +1,6 @@
 """PostgreSQL stores the index; MinIO stores the complete immutable samples."""
 import re
+from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 from orbit_codec import encode, decode
 from io import BytesIO
@@ -107,6 +108,20 @@ class Store:
             return conn.execute("""SELECT result_id,job_id,status,request,manifest,error,created_at
                 FROM satellite_results ORDER BY created_at DESC LIMIT 30""").fetchall()
 
+    def reusable_track(self, key, request, entry, engine, dll, frame):
+        # Match older block manifests by the same inputs used to derive the single-star key.
+        with self.connect() as conn:
+            row = conn.execute("""SELECT sat FROM satellite_results r,
+                jsonb_array_elements(manifest->'satellites') sat
+                WHERE status='succeeded' AND sat ? 'overview' AND sat ? 'blocks' AND
+                (sat->>'sample_key'=%s OR (sat->>'norad_id'=%s AND
+                 manifest->>'engine_version'=%s AND manifest->>'dll_fingerprint'=%s AND manifest->>'frame_version'=%s
+                 AND r.request @> %s)) LIMIT 1""",
+                (key, str(entry["norad_id"]), engine, dll, frame, Jsonb(dict(epoch_utc=request["epoch_utc"],
+                 duration_s=request["duration_s"], output_step_s=request["output_step_s"],
+                 elements=[dict(norad_id=entry["norad_id"], fingerprint=entry["fingerprint"])])))).fetchone()
+            return row["sat"] if row else None
+
     def mark_running(self, result_id):
         with self.connect() as conn:
             conn.execute("UPDATE satellite_results SET status='running',updated_at=now() WHERE result_id=%s", (result_id,))
@@ -129,25 +144,32 @@ class Store:
             raise ValueError("Cannot publish an inactive orbit job")
         step = manifest["output_step_s"]
         per_hour = 3600 // step
-        for spec, track in zip(manifest["satellites"], samples["satellites"], strict=True):
-            rows = track["samples"]
-            # Overview only; playback still uses every original sample in the hour blocks.
-            stride = max(1, (len(rows) - 1 + 719) // 720)
-            overview = rows[:-1:stride] + [rows[-1]]
-            spec["overview"] = [coordinate for point in overview for coordinate in point[1:]]
-            blocks = []
-            for first in range(0, len(rows) - 1, per_hour):
-                # Keep the final endpoint in the last hour, without duplicating boundaries.
-                end = first + per_hour
-                part = rows[first:] if end >= len(rows)-1 else rows[first:end]
-                start = int(part[0][0])
-                raw = encode([[t-start, x, y, z] for t,x,y,z in part], step)
-                digest = sha256(raw).hexdigest()
-                key = f"orbit-blocks/{spec['norad_id']}/{digest}.orb"
-                self.objects.put_object(self.settings.bucket, key, BytesIO(raw), len(raw),
-                                        content_type="application/octet-stream")
-                blocks.append(dict(start=start, count=len(part), key=key))
-            spec["blocks"] = blocks
+        # Keep publication locked until every PUT completes, including on failure.
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            uploads = []
+            for spec, track in zip(manifest["satellites"], samples["satellites"], strict=True):
+                if track is None:  # Already published immutable blocks shared by another result.
+                    continue
+                rows = track["samples"]
+                # Overview only; playback still uses every original sample in the hour blocks.
+                stride = max(1, (len(rows) - 1 + 719) // 720)
+                overview = rows[:-1:stride] + [rows[-1]]
+                spec["overview"] = [coordinate for point in overview for coordinate in point[1:]]
+                blocks = []
+                for first in range(0, len(rows) - 1, per_hour):
+                    # Keep the final endpoint in the last hour, without duplicating boundaries.
+                    end = first + per_hour
+                    part = rows[first:] if end >= len(rows)-1 else rows[first:end]
+                    start = int(part[0][0])
+                    raw = encode([[t-start, x, y, z] for t,x,y,z in part], step)
+                    digest = sha256(raw).hexdigest()
+                    key = f"orbit-blocks/{spec['norad_id']}/{digest}.orb"
+                    uploads.append(pool.submit(self.objects.put_object, self.settings.bucket, key,
+                                               BytesIO(raw), len(raw), content_type="application/octet-stream"))
+                    blocks.append(dict(start=start, count=len(part), key=key))
+                spec["blocks"] = blocks
+            for upload in uploads:
+                upload.result()
         conn.execute("""UPDATE satellite_results SET status='succeeded',object_key=NULL,
                 manifest=%s,updated_at=now() WHERE result_id=%s""", (Jsonb(manifest), result_id))
 

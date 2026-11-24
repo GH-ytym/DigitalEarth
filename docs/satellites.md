@@ -4,7 +4,7 @@
 
 ## 数据来源与时间
 
-目录由 `services/satellites/data/satellite-catalog.json` 配置，当前包含 ISS、中国空间站、HST、Terra、Landsat 9、NOAA-21、GPS IIF-1、Galileo GSAT0101、北斗三号 M1 和风云四号 B，共十颗。配置维护编号、显示名称、分类、轨道类型、来源分组和启用状态；新增条目后更新配套公开数据快照并重启 API，前端自动读取目录。单次最多选择三颗，前后端均校验。
+目录由 `services/satellites/data/satellite-catalog.json` 配置，当前包含 ISS、中国空间站、HST、Terra、Landsat 9、NOAA-21、GPS IIF-1、Galileo GSAT0101、北斗三号 M1 和风云四号 B，共十颗。配置维护编号、显示名称、分类、轨道类型、来源分组和启用状态；新增条目后更新配套公开数据快照并重启 API，前端自动读取目录。可同时选择全部已启用卫星。“清空选择和轨迹”会取消加载、清除勾选并卸载场景轨迹，历史成果仍可读取。
 
 后端按配置的来源分组批量读取 CelesTrak CSV，每个分组每轮只请求一次，再按 NORAD 编号筛选。字段采用 OMM 命名，包括历元、平均运动、偏心率、倾角、升交点赤经、近地点幅角、平近点角、BSTAR 等。种子文件 `services/satellites/data/public-gp.csv` 保存公开源的实际响应字段，配套 JSON 记录来源 URL 和获取时间。启动时仅补齐数据库缺失条目，不覆盖已存在的要素；旧目录条目和旧成果保留，当前目录及新计算请求按配置过滤。
 

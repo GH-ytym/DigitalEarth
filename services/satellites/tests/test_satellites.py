@@ -113,7 +113,7 @@ class PipelineTests(unittest.TestCase):
             catalog = client.get("/api/v1/satellites/catalog").json()
             self.assertEqual({sat["norad_id"] for sat in catalog["satellites"]},
                              {25544,48274,20580,25994,49260,54234,36585,37846,43001,48808})
-            self.assertEqual(catalog["max_selected"], 3)
+            self.assertEqual(catalog["max_selected"], len(SATELLITES))
             self.assertTrue(all(sat["source_url"].startswith("https://celestrak.org/") for sat in catalog["satellites"]))
             response = client.post("/api/v1/satellites/tracks", json=body)
             self.assertIn(response.status_code, (200,202))
@@ -138,7 +138,7 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(client.get("/api/v1/satellites/health").json()["native_calls"], count)
             self.assertEqual(client.post("/api/v1/satellites/tracks", json={**body,"altitude_km":550}).status_code, 422)
             self.assertEqual(client.post("/api/v1/satellites/tracks", json={"norad_ids":[123]}).status_code, 422)
-            for ids in ([25544,48274,20580,25994], [25544,25544], [43013]):
+            for ids in ([25544,25544], [43013]):
                 self.assertEqual(client.post("/api/v1/satellites/tracks", json={"norad_ids":ids}).status_code, 422)
             changed = client.app.state.service.prepare([25544,20580])
             key = client.app.state.service.cache_key(changed)

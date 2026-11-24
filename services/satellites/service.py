@@ -67,6 +67,12 @@ class SatelliteService:
             samples, satellites = [], []
             for entry in request["elements"]:
                 record, norad = entry["record"], entry["norad_id"]
+                key = self.cache_key(dict(request, norad_ids=[norad], elements=[entry]))
+                cached = self.store.reusable_track(key, request, entry, ENGINE_VERSION, self.native.fingerprint, FRAME_VERSION)
+                if cached:
+                    satellites.append(dict(cached, sample_key=key, fetched_at=entry["fetched_at"], source_url=entry["source_url"]))
+                    samples.append(None)
+                    continue
                 with self.lock:
                     self.native_calls += 1
                 points = self.native.propagate(record, utc(request["epoch_utc"]),
@@ -75,7 +81,7 @@ class SatelliteService:
                 samples.append(dict(satellite_id=satellite_id, samples=points))
                 satellites.append(dict(satellite_id=satellite_id, norad_id=norad,
                     display_name=SATELLITES[norad], object_name=record["OBJECT_NAME"],
-                    sample_count=len(points), period_s=86400/float(record["MEAN_MOTION"]),
+                    sample_key=key, sample_count=len(points), period_s=86400/float(record["MEAN_MOTION"]),
                     element_epoch_utc=utc(record["EPOCH"]).isoformat(), fetched_at=entry["fetched_at"],
                     source_url=entry["source_url"], elements=record))
             start = utc(request["epoch_utc"])

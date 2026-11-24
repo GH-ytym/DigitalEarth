@@ -33,7 +33,7 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
   const [error, setError] = useState<string | null>(null);
   const operation = useRef<AbortController | null>(null);
   const catalogLoaded = useRef(false);
-  const limit = catalog?.max_selected ?? 3;
+  const limit = catalog?.max_selected ?? 0;
   const categories = [...new Map(catalog?.satellites.map(sat => [sat.category, sat.category_name])).entries()];
   const query = search.trim().toLocaleLowerCase();
   const visible = catalog?.satellites.filter(sat => (!category || sat.category === category) &&
@@ -93,6 +93,15 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
     }
   }
 
+  function clearScene() {
+    operation.current?.abort();
+    setBusy(false);
+    setError(null);
+    setMessage('');
+    setSelected([]);
+    onClear();
+  }
+
   return <div className="satellite-panel-content">
     <div className="satellite-source-heading"><strong>卫星列表</strong><button className="text-button" disabled={busy} onClick={() => void act('refresh')}>更新数据</button></div>
     <div className="satellite-filters">
@@ -103,7 +112,7 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
     </div>
     <div className="satellite-selection-status">
       <span role="status">已选 {selected.length} / {limit}<span> · 共 {catalog?.satellites.length ?? 0} 颗</span></span>
-      <button className="text-button" aria-label="清空卫星选择" disabled={busy || !selected.length} onClick={() => setSelected([])}>清空</button>
+      <button className="text-button" aria-label="清空选择和轨迹" disabled={(!catalog && busy) || (!selected.length && !playback && !busy)} onClick={clearScene}>清空选择和轨迹</button>
     </div>
     <div className="satellite-list" role="group" aria-label="可选卫星列表" tabIndex={0}>
     {visible.map(sat => {
@@ -133,7 +142,7 @@ export function SatellitePanel({ active, playback, ready, onLoad, onFocus, onCle
         <p>回放时长：{playback.manifest.duration_s / 3600} 小时</p>
         {playback.manifest.window_kind === 'historical' && <p>当前使用较旧要素对应的历史时段。</p>}
       </div>
-      <div className="satellite-actions"><button className="text-button" onClick={onFocus}>查看全部轨迹</button><button className="text-button" onClick={() => { operation.current?.abort(); setBusy(false); setMessage(''); onClear(); }}>卸载轨迹</button></div>
+      <div className="satellite-actions"><button className="text-button" onClick={onFocus}>查看全部轨迹</button></div>
       <details className="satellite-provenance"><summary>数据获取时间与来源</summary>
         {playback.manifest.satellites.map(sat => <p key={sat.satellite_id}>{sourceLink(sat.source_url, sat.object_name)}<br />要素：{satelliteTime(sat.element_epoch_utc)}<br />获取：{satelliteTime(sat.fetched_at)}</p>)}
         {modelSources.map(model => <div key={model.version_id}>
